@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from 'react'
 import { fetchCurrentUser, login, logout, type AuthUser } from '../lib/api'
+import { HrDataProvider } from '../lib/hr-data'
 import {
   Activity,
   ArrowDownRight,
@@ -2170,8 +2171,15 @@ export default function Page() {
     setActive('Dashboard')
   }
 
-  if (!authenticated) return <LoginPage onLogin={(next, user) => { setPortal(next); setCurrentUser(user); setActive('Dashboard'); setAuthenticated(true) }} />
-  return <main className="app-shell">
+if (!authenticated)
+  return (
+    <HrDataProvider user={currentUser}>
+      <LoginPage onLogin={(next, user) => { setPortal(next); setCurrentUser(user); setActive('Dashboard'); setAuthenticated(true) }} />
+    </HrDataProvider>
+  )
+return (
+<HrDataProvider user={currentUser}>
+<main className="app-shell">
     <div className={`mobile-overlay ${mobileOpen ? 'show' : ''}`} onClick={() => setMobileOpen(false)} />
 <div className={mobileOpen ? 'mobile-nav-open' : ''}><SideNav portal={portal} active={active} onChange={(item) => { setActive(item); setMobileOpen(false) }} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} unread={unread} user={currentUser} /></div>{collapsed && <button className="sidebar-reopen icon-button" onClick={() => setCollapsed(false)} aria-label="Open sidebar" title="Open sidebar"><Menu /></button>}
   <section className="main-area">
@@ -2180,4 +2188,6 @@ export default function Page() {
       <footer className="main-footer"><span><span className="live-dot" /> All systems operational</span><span>© 2024 GoldenHR <span className="footer-divider">·</span> Built for better work.</span></footer>
     </section>
   </main>
+</HrDataProvider>
+)
 }
