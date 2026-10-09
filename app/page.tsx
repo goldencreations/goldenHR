@@ -1990,11 +1990,17 @@ function LoginPage({ onLogin }: { onLogin: (portal: Portal, user: AuthUser) => v
       onLogin(user.is_hr ? 'HR' : 'Employee', user)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign in failed. Please try again.')
+
+      // The password is cleared so a rejected attempt cannot be repeated by
+      // resubmitting, and so the next attempt is typed deliberately rather
+      // than accepted from a stale autofill. Capitalisation and a trailing
+      // space are both rejected by the API.
+      setPassword('')
       setBusy(false)
     }
   }
 
-  return <main className="login-screen"><section className="login-widget"><div className="login-brand"><div className="brand-mark"><GoldMark /></div><div><strong>GOLDENHR</strong><span>People, elevated.</span></div></div><h1>Welcome back.</h1><p>Sign in to your people workspace and keep better work moving.</p><form className="login-form" onSubmit={submit}><div className="login-field"><label htmlFor="login-email">Email address</label><input id="login-email" type="email" autoComplete="username" placeholder="you@goldenhr.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></div><div className="login-field"><label htmlFor="login-password">Password</label><input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div>{error && <div className="login-error" role="alert"><X />{error}</div>}<button className="login-submit" type="submit" disabled={busy}>{busy ? 'Signing inâ€¦' : 'Sign in to GoldenHR'}</button></form><p className="login-footnote">Your portal is chosen automatically from your account.</p></section></main>
+  return <main className="login-screen"><section className="login-widget"><div className="login-brand"><div className="brand-mark"><GoldMark /></div><div><strong>GOLDENHR</strong><span>People, elevated.</span></div></div><h1>Welcome back.</h1><p>Sign in to your people workspace and keep better work moving.</p><form className="login-form" onSubmit={submit}><div className="login-field"><label htmlFor="login-email">Email address</label><input id="login-email" type="email" autoComplete="username" placeholder="you@goldenhr.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></div><div className="login-field"><label htmlFor="login-password">Password</label><input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div>{error && <div className="login-error" role="alert"><X />{error}</div>}<button className="login-submit" type="submit" disabled={busy}>{busy ? 'Signing inâ€¦' : 'Sign in to GoldenHR'}</button></form><p className="login-footnote">Passwords are case sensitive and a trailing space is rejected. Your portal is chosen automatically from your account.</p></section></main>
 }
 
 type ActivityRow = { id: string; title: string; meta: string; amount: string; status: string; time: string; kind: NoticeKind }
