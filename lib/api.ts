@@ -109,8 +109,17 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     })
   } catch (cause) {
     if ((cause as Error)?.name === 'AbortError') throw cause
+
+    /*
+     * A blocked cross-origin request fails here as an opaque TypeError, and
+     * the console shows a CORS error rather than anything this catch can
+     * inspect. Reporting it as a plain network failure sends people looking
+     * at their connection, so the message names the likely cause.
+     */
     throw new ApiError(
-      'Could not reach the GoldenHR service. Check your connection and try again.',
+      'Could not reach the GoldenHR service. If you are running the app locally, ' +
+        'check that this origin is listed in the API CORS_ALLOWED_ORIGINS setting — ' +
+        'the browser reports that as a connection failure.',
       0,
     )
   }
