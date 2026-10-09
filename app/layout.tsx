@@ -47,7 +47,13 @@ export default function RootLayout({
     <html lang="en" className={inter.variable}>
       <body className="antialiased">
         {children}
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        {/*
+          Vercel Analytics only works when the app is served by Vercel. On
+          the VPS it requests /_vercel/insights/script.js, which 404s and is
+          then rejected by the browser as a script served as text/html. Gate
+          it on an explicit flag instead of NODE_ENV.
+        */}
+        {process.env.NEXT_PUBLIC_ENABLE_ANALYTICS === 'true' && <Analytics />}
       </body>
     </html>
   )
