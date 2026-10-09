@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useMemo, useState } from 'react'
+import { fetchCurrentUser, login, logout, type AuthUser } from '../lib/api'
 import {
   Activity,
   ArrowDownRight,
@@ -42,6 +43,24 @@ import {
 } from 'lucide-react'
 
 type Portal = 'HR' | 'Employee'
+
+/** Two-letter avatar initials from the signed-in account. */
+function initialsOf(name?: string | null): string {
+  if (!name) return 'GH'
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return 'GH'
+  const first = parts[0]?.[0] ?? ''
+  const last = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? '' : ''
+  return (first + last).toUpperCase() || 'GH'
+}
+
+/** Human label for the account's role, shown under the name. */
+function roleLabelOf(user: AuthUser | null): string {
+  if (!user) return ''
+  if (user.role === 'hr_admin') return 'HR Administrator'
+  if (user.role === 'hr_officer') return 'HR Officer'
+  return user.employee?.job_role ?? 'Employee'
+}
 
 type NavItem = {
   label: string
@@ -98,7 +117,7 @@ function GoldMark({ className }: { className?: string }) {
   </svg>
 }
 
-function SideNav({ portal, active, onChange, collapsed, onToggle, unread }: { portal: Portal; active: string; onChange: (item: string) => void; collapsed: boolean; onToggle: () => void; unread: number }) {
+function SideNav({ portal, active, onChange, collapsed, onToggle, unread, user }: { portal: Portal; active: string; onChange: (item: string) => void; collapsed: boolean; onToggle: () => void; unread: number; user: AuthUser | null }) {
   const nav = portal === 'HR' ? hrNav : employeeNav
   return <aside className={`side-nav ${collapsed ? 'collapsed' : ''}`}>
     <div className="brand-wrap">
@@ -110,7 +129,7 @@ function SideNav({ portal, active, onChange, collapsed, onToggle, unread }: { po
     <nav className="nav-list" aria-label={`${portal} navigation`}>
       {nav.map((item) => { const Icon = item.icon; return <button key={item.label} className={`nav-item ${active === item.label ? 'active' : ''}`} onClick={() => onChange(item.label)} title={collapsed ? item.label : undefined}><Icon />{!collapsed && <span>{item.label}</span>}{!collapsed && item.label === 'Notifications' && unread > 0 && <b className="nav-badge">{unread}</b>}</button> })}
     </nav>
-    {!collapsed && <div className="side-footer"><div className="upgrade-card"><ShieldCheck /><div><strong>People-first security</strong><p>Your workspace is protected.</p></div></div><div className="profile-mini"><div className="avatar avatar-sand">JD</div><div><strong>Jordan Davis</strong><span>HR Administrator</span></div><ChevronDown /></div></div>}
+    {!collapsed && <div className="side-footer"><div className="upgrade-card"><ShieldCheck /><div><strong>People-first security</strong><p>Your workspace is protected.</p></div></div><div className="profile-mini"><div className="avatar avatar-sand">{initialsOf(user?.name)}</div><div><strong>{user?.name ?? 'Guest'}</strong><span>{roleLabelOf(user)}</span></div><ChevronDown /></div></div>}
   </aside>
 }
 
@@ -128,8 +147,8 @@ type ProfileRecord = typeof employeeRecords[number]
 type ProfileTab = 'registration' | 'contract' | 'leave' | 'payslip' | 'documents'
 
 const profileLeave = [
-  { type: 'Annual leave', dates: 'Jul 18 â€“ Jul 22, 2024', days: '5 days', status: 'Approved', approver: 'Sofia Martin' },
-  { type: 'Sick leave', dates: 'Mar 04 â€“ Mar 05, 2024', days: '2 days', status: 'Approved', approver: 'Sofia Martin' },
+  { type: 'Annual leave', dates: 'Jul 18 Ã¢â‚¬â€œ Jul 22, 2024', days: '5 days', status: 'Approved', approver: 'Sofia Martin' },
+  { type: 'Sick leave', dates: 'Mar 04 Ã¢â‚¬â€œ Mar 05, 2024', days: '2 days', status: 'Approved', approver: 'Sofia Martin' },
   { type: 'Personal leave', dates: 'Feb 12, 2024', days: '1 day', status: 'Declined', approver: 'Sofia Martin' },
 ]
 
@@ -256,7 +275,7 @@ function EmployeeForm({ editing, onDone }: { editing: typeof employeeRecords[num
       <div className="form-actions"><button type="button" className="secondary-button" onClick={onDone}>Cancel</button><button className="primary-button" type="submit" onClick={(event) => {
         if (!editing && (password.length < 8 || password !== confirmPassword)) { event.preventDefault(); setPasswordError(password.length < 8 ? 'Set a password of at least 8 characters' : 'Both passwords must match'); return }
         setPasswordError('')
-        if (!editing) pushNotice({ kind: 'employee', title: `New employee added: ${values.name}`, detail: `${values.role || 'Role not set'} Â· ${values.department || 'No department'} Â· login created for ${values.email}.`, actor: 'Jordan Davis', time: 'Just now', audience: 'HR' })
+        if (!editing) pushNotice({ kind: 'employee', title: `New employee added: ${values.name}`, detail: `${values.role || 'Role not set'} Ã‚Â· ${values.department || 'No department'} Ã‚Â· login created for ${values.email}.`, actor: 'Jordan Davis', time: 'Just now', audience: 'HR' })
       }}><UserPlus /> {editing ? 'Save changes' : 'Create employee'}</button></div>
     </form>
   </section>
@@ -271,7 +290,7 @@ function EmployeeManagementPage() {
   const filtered = records.filter((person) => `${person.name} ${person.role} ${person.department}`.toLowerCase().includes(query.toLowerCase()))
   if (editing) return <AddEmployeePage editing={editing} onDone={() => { setRecords(records.map((item) => (item.email === editing.email ? { ...item, name: editing.name } : item))); setEditing(null) }} />
   if (selected) return <RegistrationInfo person={selected} mode="hr" onBack={() => setSelected(null)} onSaved={(updated) => { setRecords(records.map((item) => (item.email === updated.email ? updated : item))); setNotice(`${updated.name} record updated`); setSelected(updated) }} />
-  return <section className="management-page"><div className="workspace-hero"><div><p className="eyebrow">PEOPLE DIRECTORY</p><h1>Employee management</h1><p>Manage profiles, employment details, and secure employee records.</p></div><button className="primary-button" onClick={() => setNotice('New employee form ready')}><UserPlus /> Add employee</button></div>{notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong><p>Complete the profile and attach the supporting records.</p></div></div>}<div className="panel"><div className="management-toolbar"><div><p className="eyebrow">{records.length} ACTIVE PROFILES</p><h2>All employees</h2></div><div className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people" /></div></div><div className="employee-list">{filtered.map((person, index) => <div className="employee-card" key={person.email}><div className={`avatar ${['saffron','olive','plum','clay'][index % 4]}`}>{person.name.split(' ').map((name) => name[0]).join('')}</div><div><strong>{person.name}</strong><span>{person.role} Â· {person.department}</span></div><span className="status-pill">{person.type}</span><div className="employee-actions"><button aria-label={`View ${person.name}`} onClick={() => setSelected(person)}><Eye /></button><button aria-label={`Edit ${person.name}`} onClick={() => setEditing(person)}><Pencil /></button><button aria-label={`Delete ${person.name}`} onClick={() => setRecords(records.filter((item) => item.email !== person.email))}><Trash2 /></button></div></div>)}</div></div></section>
+  return <section className="management-page"><div className="workspace-hero"><div><p className="eyebrow">PEOPLE DIRECTORY</p><h1>Employee management</h1><p>Manage profiles, employment details, and secure employee records.</p></div><button className="primary-button" onClick={() => setNotice('New employee form ready')}><UserPlus /> Add employee</button></div>{notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong><p>Complete the profile and attach the supporting records.</p></div></div>}<div className="panel"><div className="management-toolbar"><div><p className="eyebrow">{records.length} ACTIVE PROFILES</p><h2>All employees</h2></div><div className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people" /></div></div><div className="employee-list">{filtered.map((person, index) => <div className="employee-card" key={person.email}><div className={`avatar ${['saffron','olive','plum','clay'][index % 4]}`}>{person.name.split(' ').map((name) => name[0]).join('')}</div><div><strong>{person.name}</strong><span>{person.role} Ã‚Â· {person.department}</span></div><span className="status-pill">{person.type}</span><div className="employee-actions"><button aria-label={`View ${person.name}`} onClick={() => setSelected(person)}><Eye /></button><button aria-label={`Edit ${person.name}`} onClick={() => setEditing(person)}><Pencil /></button><button aria-label={`Delete ${person.name}`} onClick={() => setRecords(records.filter((item) => item.email !== person.email))}><Trash2 /></button></div></div>)}</div></div></section>
 }
 
 const departmentData = [{ name: 'Engineering', lead: 'Noah Williams', roles: ['Engineering Lead', 'Frontend Engineer', 'QA Specialist'], employees: ['Noah Williams', 'Maya Patel', 'Ethan Cole'] }, { name: 'Design', lead: 'Amara Okafor', roles: ['Product Designer', 'UX Researcher'], employees: ['Amara Okafor', 'Luca Rossi'] }, { name: 'Human Resources', lead: 'Sofia Martin', roles: ['People Operations', 'Recruiter'], employees: ['Sofia Martin', 'Jordan Davis'] }, { name: 'Marketing', lead: 'Liam Chen', roles: ['Growth Manager', 'Content Strategist'], employees: ['Liam Chen', 'Nia Johnson'] }]
@@ -328,7 +347,7 @@ const addRoles = (names: string[]) => {
   return <section className="management-page profile-page">
     <button className="back-link" onClick={onBack}><ChevronDown /> Back to departments</button>
     <div className="panel profile-hero">
-      <div className="profile-hero-main"><div className="department-icon"><Building2 /></div><div><p className="eyebrow">DEPARTMENT</p><h1>{department.name}</h1><p className="muted-copy">Led by {department.lead} Â· {department.employees.length} employees Â· {department.roles.length} roles defined</p></div></div>
+      <div className="profile-hero-main"><div className="department-icon"><Building2 /></div><div><p className="eyebrow">DEPARTMENT</p><h1>{department.name}</h1><p className="muted-copy">Led by {department.lead} Ã‚Â· {department.employees.length} employees Ã‚Â· {department.roles.length} roles defined</p></div></div>
       <div className="form-actions"><button className="secondary-button" onClick={() => setBulk(!bulk)}><Plus /> Add more roles</button><button className="primary-button" onClick={() => setTab('employees')}><UserPlus /> Assign employees</button></div>
     </div>
     {notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong><p>The role library for this department is up to date.</p></div></div>}
@@ -340,8 +359,8 @@ const addRoles = (names: string[]) => {
       <CountWidget value={`${unassigned.length}`} hint="unassigned" tone="tone-rose" icon={Clock3} foot="Need a role assignment" />
     </div>
     <div className="profile-tabs" role="tablist">
-      <button role="tab" aria-selected={tab === 'roles'} className={`profile-tab ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}><FileCheck2 />Roles Â· {department.roles.length}</button>
-      <button role="tab" aria-selected={tab === 'employees'} className={`profile-tab ${tab === 'employees' ? 'active' : ''}`} onClick={() => setTab('employees')}><Users />Employees Â· {department.employees.length}</button>
+      <button role="tab" aria-selected={tab === 'roles'} className={`profile-tab ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}><FileCheck2 />Roles Ã‚Â· {department.roles.length}</button>
+      <button role="tab" aria-selected={tab === 'employees'} className={`profile-tab ${tab === 'employees' ? 'active' : ''}`} onClick={() => setTab('employees')}><Users />Employees Ã‚Â· {department.employees.length}</button>
     </div>
 
     {tab === 'roles' && <div className="panel">
@@ -366,7 +385,7 @@ const addRoles = (names: string[]) => {
           return <div className="profile-table-row" key={employee}>
             <span className="role-person"><span className={`avatar avatar-mini ${['saffron', 'olive', 'plum', 'clay'][index % 4]}`}>{employee.split(' ').map((part) => part[0]).join('')}</span><strong>{employee}</strong></span>
             <span><select className="inline-select" value={role} onChange={(event) => { setAssignments((current) => ({ ...current, [employee]: event.target.value })); setNotice(`${employee} assigned to ${event.target.value || 'no role'}`); pushNotice({ kind: 'role', title: 'Role assignment updated', detail: `${employee} is now ${event.target.value || 'unassigned'} in ${department.name}.`, actor: 'Jordan Davis', time: 'Just now', audience: 'Both' }) }}><option value="">Unassigned</option>{department.roles.map((item) => <option key={item}>{item}</option>)}</select></span>
-            <span>{role && level[role] ? level[role] : 'â€”'}</span>
+            <span>{role && level[role] ? level[role] : 'Ã¢â‚¬â€'}</span>
             <span className={`status-pill ${role ? 'ok' : 'off'}`}>{role ? 'Assigned' : 'Unassigned'}</span>
             <button className="ghost-icon" aria-label={`View ${employee}`}><Eye /></button>
           </div>
@@ -396,7 +415,7 @@ function DepartmentRolesPage() {
       <h2>{department.name}</h2><p>Led by <strong>{department.lead}</strong></p>
       {addingTo === department.name ? <RoleComposer roles={department.roles} onChange={(next) => setDepartments((items) => items.map((item) => (item.name === department.name ? { ...item, roles: next } : item)))} placeholder="Type a role, then press enter" /> : <div className="role-list">{department.roles.map((role) => <span key={role}>{role}</span>)}</div>}
       <div className="department-card-actions"><button className="secondary-button" onClick={() => setAddingTo(addingTo === department.name ? null : department.name)}><Plus /> Add role</button><button className="more-button" onClick={() => setSelected(department)}>Manage <ArrowUpRight /></button></div>
-      <div className="department-people"><div className="avatar-stack">{department.employees.map((employee, index) => <div className={`avatar ${['saffron', 'olive', 'plum'][index % 3]}`} key={employee}>{employee.split(' ').map((part) => part[0]).join('')}</div>)}</div><span>{department.roles.length} roles defined Â· {department.roles.length} roles</span></div>
+      <div className="department-people"><div className="avatar-stack">{department.employees.map((employee, index) => <div className={`avatar ${['saffron', 'olive', 'plum'][index % 3]}`} key={employee}>{employee.split(' ').map((part) => part[0]).join('')}</div>)}</div><span>{department.roles.length} roles defined Ã‚Â· {department.roles.length} roles</span></div>
     </article>)}</div>
 {showForm && <AppModal eyebrow="Organization" title="Create department" meta="Define the team, its lead and the roles it owns." icon={Building2} footer={<><button className="secondary-button" onClick={() => setShowForm(false)}>Cancel</button><button className="primary-button" onClick={() => { const clean = name.trim(); if (!clean) return; setDepartments([...departments, { name: clean, lead: lead || 'Not assigned', roles, employees: [] }]); setName(''); setLead(''); setRoles([]); setShowForm(false); setSaved(true); pushNotice({ kind: 'department', title: `Department created: ${clean}`, detail: `${roles.length} role${roles.length === 1 ? '' : 's'} defined. Lead: ${lead || 'Not assigned'}.`, actor: 'Jordan Davis', time: 'Just now', audience: 'HR' }) }}><Building2 /> Create department</button></>} onClose={() => setShowForm(false)}>
     <div className="form-grid"><Field label="Department name"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Customer Success" /></Field><Field label="Department lead"><select value={lead} onChange={(event) => setLead(event.target.value)} defaultValue=""><option value="" disabled>Select lead</option>{employeeRecords.map((employee) => <option key={employee.email}>{employee.name}</option>)}</select></Field><div className="field full"><label>Roles in this department</label><RoleComposer roles={roles} onChange={setRoles} /></div></div>
@@ -440,12 +459,12 @@ const decide = (request: LeaveRequest, status: 'Approved' | 'Declined') => {
   if (open) return <section className="management-page profile-page">
     <button className="back-link" onClick={() => { setOpenId(null); setNote('') }}><ChevronDown /> Back to leave approval</button>
     <div className="panel contract-hero">
-      <div className="profile-hero-main"><div className={`avatar avatar-large ${open.tone}`}>{open.initials}</div><div><p className="eyebrow">{open.id}</p><h1>{open.type}</h1><p className="muted-copy">{open.employee} Â· submitted {open.submitted}</p><div className="profile-hero-tags"><span className={`status-pill ${open.status === 'Approved' ? 'ok' : open.status === 'Declined' ? 'off' : ''}`}>{open.status}</span><span className="status-pill">{open.days} working days</span></div></div></div>
+      <div className="profile-hero-main"><div className={`avatar avatar-large ${open.tone}`}>{open.initials}</div><div><p className="eyebrow">{open.id}</p><h1>{open.type}</h1><p className="muted-copy">{open.employee} Ã‚Â· submitted {open.submitted}</p><div className="profile-hero-tags"><span className={`status-pill ${open.status === 'Approved' ? 'ok' : open.status === 'Declined' ? 'off' : ''}`}>{open.status}</span><span className="status-pill">{open.days} working days</span></div></div></div>
       {open.status === 'Pending' && <div className="form-actions"><button className="secondary-button" onClick={() => decide(open, 'Declined')}><X /> Decline</button><button className="primary-button" onClick={() => decide(open, 'Approved')}><FileCheck2 /> Approve request</button></div>}
     </div>
     <div className="count-widget-row count-widget-row-4">
       <CountWidget value={open.type} hint="leave type" tone="tone-blue" icon={CalendarDays} foot="Requested category" />
-      <CountWidget value={`${open.days}`} hint="working days" tone="tone-gold" icon={Clock3} foot={`${formatDate(open.start)} â†’ ${formatDate(open.end)}`} />
+      <CountWidget value={`${open.days}`} hint="working days" tone="tone-gold" icon={Clock3} foot={`${formatDate(open.start)} Ã¢â€ â€™ ${formatDate(open.end)}`} />
       <CountWidget value={`${18 - open.days}`} hint="days balance left" tone="tone-green" icon={WalletCards} foot="After this request" />
       <CountWidget value={open.approver} hint="approver" tone="tone-violet" icon={ShieldCheck} foot={open.coverage === open.approver ? 'Also covering the leave' : `Cover: ${open.coverage}`} />
     </div>
@@ -464,13 +483,13 @@ const decide = (request: LeaveRequest, status: 'Approved' | 'Declined') => {
       <CountWidget value={`${counts.Declined}`} hint="declined" tone="tone-rose" icon={X} foot="Sent back to employees" />
       <CountWidget value="12" hint="on leave today" tone="tone-blue" icon={CalendarDays} foot="Across all departments" />
     </div>
-    <div className="profile-tabs" role="tablist">{(['Pending', 'Approved', 'Declined', 'All'] as const).map((key) => <button key={key} role="tab" aria-selected={filter === key} className={`profile-tab ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}><ClipboardCheck />{key === 'All' ? 'All requests' : `${key} Â· ${counts[key]}`}</button>)}</div>
+    <div className="profile-tabs" role="tablist">{(['Pending', 'Approved', 'Declined', 'All'] as const).map((key) => <button key={key} role="tab" aria-selected={filter === key} className={`profile-tab ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}><ClipboardCheck />{key === 'All' ? 'All requests' : `${key} Ã‚Â· ${counts[key]}`}</button>)}</div>
     <div className="panel">
       <div className="panel-heading"><div><p className="eyebrow">{visible.length} SHOWN</p><h2>{filter === 'All' ? 'All requests' : `${filter} requests`}</h2></div></div>
       <div className="leave-list">
         {visible.map((request) => <article className="leave-row" key={request.id}>
           <div className={`avatar ${request.tone}`}>{request.initials}</div>
-          <div className="leave-row-main"><div className="leave-row-head"><strong>{request.employee}</strong><span className="status-pill">{request.type}</span></div><p className="leave-row-dates">{formatDate(request.start)} â†’ {formatDate(request.end)} <i>Â·</i> {request.days} working days</p><p className="leave-row-meta">Coverage: {request.coverage} <i>Â·</i> Approver: {request.approver} <i>Â·</i> Submitted {request.submitted}</p><p className="leave-row-reason">{request.reason}</p></div>
+          <div className="leave-row-main"><div className="leave-row-head"><strong>{request.employee}</strong><span className="status-pill">{request.type}</span></div><p className="leave-row-dates">{formatDate(request.start)} Ã¢â€ â€™ {formatDate(request.end)} <i>Ã‚Â·</i> {request.days} working days</p><p className="leave-row-meta">Coverage: {request.coverage} <i>Ã‚Â·</i> Approver: {request.approver} <i>Ã‚Â·</i> Submitted {request.submitted}</p><p className="leave-row-reason">{request.reason}</p></div>
           <div className="leave-row-actions">{request.status === 'Pending' ? <><button className="secondary-button" onClick={() => decide(request, 'Declined')}>Decline</button><button className="primary-button" onClick={() => decide(request, 'Approved')}><FileCheck2 /> Approve</button></> : <span className={`status-pill ${request.status === 'Approved' ? 'ok' : 'off'}`}>{request.status}</span>}<button className="more-button" onClick={() => setOpenId(request.id)}><Eye /> Review</button></div>
         </article>)}
         {visible.length === 0 && <div className="leave-empty"><ClipboardCheck /><p>No {filter.toLowerCase()} requests right now.</p></div>}
@@ -494,7 +513,7 @@ function LeaveRequestPage() {
         <Field label="Working days requested"><input type="number" min="1" value={days} onChange={(event) => setDays(event.target.value)} /></Field>
         <Field label="Start date"><input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></Field>
         <Field label="End date"><input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></Field>
-        <Field label="Leave balance after request" full><div className="leave-balance"><Sparkles /><div><strong>{Math.max(0, 18 - Number(days || 0))} days remaining</strong><p>{type} Â· {start && end ? `${formatDate(start)} â†’ ${formatDate(end)}` : 'Add dates to see the period'}</p></div></div></Field>
+        <Field label="Leave balance after request" full><div className="leave-balance"><Sparkles /><div><strong>{Math.max(0, 18 - Number(days || 0))} days remaining</strong><p>{type} Ã‚Â· {start && end ? `${formatDate(start)} Ã¢â€ â€™ ${formatDate(end)}` : 'Add dates to see the period'}</p></div></div></Field>
         <Field label="Reason" full><textarea rows={4} placeholder="Add context for your manager" /></Field>
       </div>
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSubmitted(false)}>Cancel</button><button className="primary-button" type="submit"><CalendarDays /> Submit request</button></div>
@@ -538,8 +557,8 @@ function PayrollBreakdown({ basic, overtime, bonus, allowance, tax, pension, oth
       <div className="payroll-lines-total"><span>Gross pay</span><strong>{money(gross)}</strong></div>
     </div>
     <div className="payroll-lines payroll-lines-deduct">
-      {deductionOptions.map(({ key, label }) => <div key={key}><span>{label}</span><strong>âˆ’ {money(key === 'tax' ? tax : key === 'pension' ? pension : other)}</strong></div>)}
-      <div className="payroll-lines-total"><span>Total deductions</span><strong>âˆ’ {money(total)}</strong></div>
+      {deductionOptions.map(({ key, label }) => <div key={key}><span>{label}</span><strong>Ã¢Ë†â€™ {money(key === 'tax' ? tax : key === 'pension' ? pension : other)}</strong></div>)}
+      <div className="payroll-lines-total"><span>Total deductions</span><strong>Ã¢Ë†â€™ {money(total)}</strong></div>
     </div>
     <div className="payroll-net"><span>Net pay</span><strong>{money(net)}</strong></div>
   </div>
@@ -581,7 +600,7 @@ function CreatePayrollPage({ onCreated, onCancel }: { onCreated: (record: Payrol
 
     {step === 1 && <div className="panel">
       <div className="panel-heading"><div><p className="eyebrow">STEP 01</p><h2>Who is this payroll for?</h2></div><div className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search employees" /></div></div>
-      <div className="employee-select-list">{candidates.map((record, index) => <button className="employee-select-row" key={record.email} onClick={() => choose(record)}><span className={`avatar ${['saffron', 'olive', 'plum', 'clay'][index % 4]}`}>{record.name.split(' ').map((part) => part[0]).join('')}</span><span><strong>{record.name}</strong><span>{record.role} Â· {record.department} Â· {record.type}</span></span><span className="employee-select-salary">{record.salary}<small>per month</small></span><ArrowUpRight /></button>)}</div>
+      <div className="employee-select-list">{candidates.map((record, index) => <button className="employee-select-row" key={record.email} onClick={() => choose(record)}><span className={`avatar ${['saffron', 'olive', 'plum', 'clay'][index % 4]}`}>{record.name.split(' ').map((part) => part[0]).join('')}</span><span><strong>{record.name}</strong><span>{record.role} Ã‚Â· {record.department} Ã‚Â· {record.type}</span></span><span className="employee-select-salary">{record.salary}<small>per month</small></span><ArrowUpRight /></button>)}</div>
       {candidates.length === 0 && <div className="leave-empty"><Users /><p>No employees match your search.</p></div>}
     </div>}
 
@@ -589,7 +608,7 @@ function CreatePayrollPage({ onCreated, onCancel }: { onCreated: (record: Payrol
       <div className="payroll-main">
         <article className="panel payroll-employee">
           <div className="panel-heading"><div><p className="eyebrow">EMPLOYEE ON THIS PAY RUN</p><h2>{person.name}</h2></div><button className="secondary-button" onClick={() => setStep(1)}><Pencil /> Change</button></div>
-          <div className="profile-hero-main payroll-employee-main"><div className={`avatar avatar-large ${['saffron', 'olive', 'plum', 'clay'][employeeRecords.indexOf(person) % 4]}`}>{person.name.split(' ').map((part) => part[0]).join('')}</div><div><p className="muted-copy">{person.role} Â· {person.department} Â· {person.type}</p><div className="profile-hero-tags"><span className="status-pill">{person.hire}</span><span className="status-pill">NIDA {person.nida}</span><span className="status-pill ok">Active</span></div></div></div>
+          <div className="profile-hero-main payroll-employee-main"><div className={`avatar avatar-large ${['saffron', 'olive', 'plum', 'clay'][employeeRecords.indexOf(person) % 4]}`}>{person.name.split(' ').map((part) => part[0]).join('')}</div><div><p className="muted-copy">{person.role} Ã‚Â· {person.department} Ã‚Â· {person.type}</p><div className="profile-hero-tags"><span className="status-pill">{person.hire}</span><span className="status-pill">NIDA {person.nida}</span><span className="status-pill ok">Active</span></div></div></div>
           <div className="detail-fields profile-fields">
             {[['Phone', person.phone], ['Email', person.email], ['NIDA', person.nida], ['TIN', 'TIN-4482-9917'], ['Base salary', person.salary], ['Employment type', person.type]].map(([label, value]) => <div className="detail-field" key={label}><small>{label}</small><strong>{value}</strong></div>)}
           </div>
@@ -597,7 +616,7 @@ function CreatePayrollPage({ onCreated, onCancel }: { onCreated: (record: Payrol
         </article>
 
         <article className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">STEP 02 Â· EARNINGS</p><h2>Pay period</h2></div></div>
+          <div className="panel-heading"><div><p className="eyebrow">STEP 02 Ã‚Â· EARNINGS</p><h2>Pay period</h2></div></div>
           <div className="detail-fields profile-fields">
             <div className="detail-field"><small>Pay month</small><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></div>
             <div className="detail-field"><small>Payment method</small><select value={method} onChange={(event) => setMethod(event.target.value)}><option>Bank transfer</option><option>Mobile money</option><option>Cash</option></select></div>
@@ -609,7 +628,7 @@ function CreatePayrollPage({ onCreated, onCancel }: { onCreated: (record: Payrol
         </article>
 
         <article className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">STEP 02 Â· DEDUCTIONS</p><h2>Statutory and other</h2></div></div>
+          <div className="panel-heading"><div><p className="eyebrow">STEP 02 Ã‚Â· DEDUCTIONS</p><h2>Statutory and other</h2></div></div>
           <div className="detail-fields profile-fields">
             {deductionOptions.map(({ key, label }) => <div className="detail-field" key={key}><small>{label}</small><input type="number" value={entry[key]} onChange={(event) => set({ [key]: Number(event.target.value) } as Partial<typeof entry>)} /></div>)}
           </div>
@@ -620,7 +639,7 @@ function CreatePayrollPage({ onCreated, onCancel }: { onCreated: (record: Payrol
       </div>
       <aside className="payroll-side">
         <PayrollBreakdown {...entry} />
-        <div className="panel payroll-side-note"><WalletCards /><div><strong>{person.name}</strong><p>{new Date(`${month}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })} Â· {method}</p></div></div>
+        <div className="panel payroll-side-note"><WalletCards /><div><strong>{person.name}</strong><p>{new Date(`${month}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })} Ã‚Â· {method}</p></div></div>
       </aside>
     </div>}
   </section>
@@ -638,7 +657,7 @@ function PayrollCenterPage() {
   if (open) return <section className="management-page profile-page">
     <button className="back-link" onClick={() => setOpenId(null)}><ChevronDown /> Back to payroll center</button>
     <div className="panel profile-hero">
-      <div className="profile-hero-main"><div className={`avatar avatar-large ${open.tone}`}>{open.initials}</div><div><p className="eyebrow">{open.id}</p><h1>{open.employee}</h1><p className="muted-copy">{new Date(`${open.month}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })} Â· {open.method} Â· {open.paidOn === 'Pending' ? 'not yet paid' : `paid ${open.paidOn}`}</p><div className="profile-hero-tags"><span className={`status-pill ${open.status === 'Pending approval' ? '' : 'ok'}`}>{open.status}</span></div></div></div>
+      <div className="profile-hero-main"><div className={`avatar avatar-large ${open.tone}`}>{open.initials}</div><div><p className="eyebrow">{open.id}</p><h1>{open.employee}</h1><p className="muted-copy">{new Date(`${open.month}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })} Ã‚Â· {open.method} Ã‚Â· {open.paidOn === 'Pending' ? 'not yet paid' : `paid ${open.paidOn}`}</p><div className="profile-hero-tags"><span className={`status-pill ${open.status === 'Pending approval' ? '' : 'ok'}`}>{open.status}</span></div></div></div>
       <div className="form-actions"><button className="secondary-button" onClick={() => window.print()}><Download /> Export as PDF</button>{open.status === 'Pending approval' && <button className="primary-button" onClick={() => { setRecords(records.map((item) => (item.id === open.id ? { ...item, status: 'Approved', paidOn: 'Jul 28, 2024' } : item))); setNotice(`${open.employee} payroll approved`); pushNotice({ kind: 'payroll', title: `Payroll approved for ${open.employee}`, detail: `${money(open.net)} net was approved and queued for payment.`, actor: 'Jordan Davis', time: 'Just now', audience: 'Both' }) }}><FileCheck2 /> Approve payroll</button>}</div>
     </div>
     <div className="contract-columns">
@@ -699,7 +718,7 @@ function EmployeePayslipsPage() {
           <div className="payslip-card-head"><span className="payslip-card-icon"><WalletCards /></span><span className={'status-pill ' + (record.status === 'Paid' || record.status === 'Approved' ? 'ok' : '')}>{record.status}</span></div>
           <p className="eyebrow">{new Date(record.month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</p>
           <h2>{money(record.net)}</h2>
-          <p className="payslip-card-note">Net salary · gross {money(record.gross)}</p>
+          <p className="payslip-card-note">Net salary Â· gross {money(record.gross)}</p>
           <div className="payslip-card-stats"><span><small>Paid on</small><strong>{record.paidOn}</strong></span><span><small>Deductions</small><strong>{money(deductions)}</strong></span></div>
           <div className="payslip-card-foot"><span className="payslip-ref">{record.id}</span><div className="form-actions"><button className="secondary-button" onClick={() => setOpenId(record.id)}><Eye /> View</button><button className="primary-button" onClick={() => { window.print(); setNotice('Payslip download started') }}><Download /> PDF</button></div></div>
         </article>
@@ -709,21 +728,21 @@ function EmployeePayslipsPage() {
     {open && <AppModal
       eyebrow="Pay statement"
       title={new Date(open.month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) + ' payslip'}
-      meta={open.id + ' · paid via ' + open.method.toLowerCase() + ' · ' + open.paidOn}
+      meta={open.id + ' Â· paid via ' + open.method.toLowerCase() + ' Â· ' + open.paidOn}
       icon={WalletCards}
       status={open.status}
       statusTone={open.status === 'Paid' || open.status === 'Approved' ? 'ok' : 'warn'}
       heroLabel="Net paid"
       heroValue={money(open.net)}
-      heroNote={'Gross ' + money(open.gross) + ' · deductions ' + money(open.tax + open.pension + open.other)}
+      heroNote={'Gross ' + money(open.gross) + ' Â· deductions ' + money(open.tax + open.pension + open.other)}
       rows={[
         ['Basic salary', money(open.basic)],
         ['Overtime', money(open.overtime)],
         ['Bonus', money(open.bonus)],
         ['Allowance', money(open.allowance)],
-        ['PAYE income tax', '− ' + money(open.tax)],
-        ['NSSF pension', '− ' + money(open.pension)],
-        ['Other deductions', '− ' + money(open.other)],
+        ['PAYE income tax', 'âˆ’ ' + money(open.tax)],
+        ['NSSF pension', 'âˆ’ ' + money(open.pension)],
+        ['Other deductions', 'âˆ’ ' + money(open.other)],
         ['Payment method', open.method],
         ['Paid on', open.paidOn],
       ]}
@@ -751,7 +770,7 @@ function addDays(iso: string, days: number) {
 }
 
 function formatDate(iso: string) {
-  if (!iso) return 'â€”'
+  if (!iso) return 'Ã¢â‚¬â€'
   const date = new Date(`${iso}T00:00:00`)
   if (Number.isNaN(date.getTime())) return iso
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -783,10 +802,10 @@ function newDraft(index: number): ContractDraft {
 }
 
 const seededContracts = [
-  { id: 'GH-2024-018', employee: 'Amara Okafor', kind: 'Full time employment', start: '2023-05-12', end: '2026-05-11', days: 1095, salary: 'TSh 4,860,000', status: 'Active', signed: 'Signed May 10, 2023', file: 'Amara Okafor Â· Employment Agreement.pdf' },
-  { id: 'GH-2024-019', employee: 'Noah Williams', kind: 'Full time employment', start: '2022-01-08', end: '2026-01-07', days: 1460, salary: 'TSh 6,420,000', status: 'Renewal due', signed: 'Signed Jan 05, 2022', file: 'Noah Williams Â· Contract 2022.pdf' },
-  { id: 'GH-2024-020', employee: 'Sofia Martin', kind: 'Fixed term contract', start: '2023-08-21', end: '2024-08-20', days: 365, status: 'Renewal due', signed: 'Signed Aug 19, 2023', salary: 'TSh 3,920,000', file: 'Sofia Martin Â· Fixed Term.pdf' },
-  { id: 'GH-2024-021', employee: 'Liam Chen', kind: 'Part time employment', start: '2024-03-15', end: '2025-03-14', days: 365, salary: 'TSh 3,100,000', status: 'Active', signed: 'Signed Mar 13, 2024', file: 'Liam Chen Â· Part Time.pdf' },
+  { id: 'GH-2024-018', employee: 'Amara Okafor', kind: 'Full time employment', start: '2023-05-12', end: '2026-05-11', days: 1095, salary: 'TSh 4,860,000', status: 'Active', signed: 'Signed May 10, 2023', file: 'Amara Okafor Ã‚Â· Employment Agreement.pdf' },
+  { id: 'GH-2024-019', employee: 'Noah Williams', kind: 'Full time employment', start: '2022-01-08', end: '2026-01-07', days: 1460, salary: 'TSh 6,420,000', status: 'Renewal due', signed: 'Signed Jan 05, 2022', file: 'Noah Williams Ã‚Â· Contract 2022.pdf' },
+  { id: 'GH-2024-020', employee: 'Sofia Martin', kind: 'Fixed term contract', start: '2023-08-21', end: '2024-08-20', days: 365, status: 'Renewal due', signed: 'Signed Aug 19, 2023', salary: 'TSh 3,920,000', file: 'Sofia Martin Ã‚Â· Fixed Term.pdf' },
+  { id: 'GH-2024-021', employee: 'Liam Chen', kind: 'Part time employment', start: '2024-03-15', end: '2025-03-14', days: 365, salary: 'TSh 3,100,000', status: 'Active', signed: 'Signed Mar 13, 2024', file: 'Liam Chen Ã‚Â· Part Time.pdf' },
 ]
 
 function ContractsPage() {
@@ -841,14 +860,14 @@ function ContractsPage() {
 
         <div className="contract-attachments">
           <div className="panel-heading"><div><p className="eyebrow">ATTACHMENTS</p><h3 className="attachment-title">Contract document</h3></div><button className="secondary-button" onClick={() => update(draft.id, { files: [...draft.files, { name: `contract-${index + 1}.pdf`, size: '312 KB', kind: 'PDF' }] })}><FileUp /> Upload PDF or image</button></div>
-          {draft.files.length === 0 ? <div className="upload-box contract-upload"><Upload /><span>Drop the signed contract here, or upload a PDF or scanned image.</span></div> : <div className="profile-documents">{draft.files.map((file, fileIndex) => <div className="profile-document" key={`${file.name}-${fileIndex}`}><div className="department-icon"><FileText /></div><div><strong>{file.name}</strong><span>{file.kind} Â· {file.size}</span></div><div className="employee-actions"><button aria-label={`Remove ${file.name}`} onClick={() => update(draft.id, { files: draft.files.filter((_, i) => i !== fileIndex) })}><Trash2 /></button></div></div>)}</div>}
+          {draft.files.length === 0 ? <div className="upload-box contract-upload"><Upload /><span>Drop the signed contract here, or upload a PDF or scanned image.</span></div> : <div className="profile-documents">{draft.files.map((file, fileIndex) => <div className="profile-document" key={`${file.name}-${fileIndex}`}><div className="department-icon"><FileText /></div><div><strong>{file.name}</strong><span>{file.kind} Ã‚Â· {file.size}</span></div><div className="employee-actions"><button aria-label={`Remove ${file.name}`} onClick={() => update(draft.id, { files: draft.files.filter((_, i) => i !== fileIndex) })}><Trash2 /></button></div></div>)}</div>}
         </div>
 
-        <div className="contract-summary"><p className="eyebrow">CONTRACT PREVIEW</p><div><span>Employee<strong>{person ? person.name : 'Not selected'}</strong></span><span>Type<strong>{draft.kind}</strong></span><span>Duration<strong>{duration ? duration.label : 'â€”'}</strong></span><span>Period<strong>{formatDate(draft.start)} â†’ {draft.durationDays === 0 ? 'Open ended' : formatDate(end)}</strong></span></div></div>
+        <div className="contract-summary"><p className="eyebrow">CONTRACT PREVIEW</p><div><span>Employee<strong>{person ? person.name : 'Not selected'}</strong></span><span>Type<strong>{draft.kind}</strong></span><span>Duration<strong>{duration ? duration.label : 'Ã¢â‚¬â€'}</strong></span><span>Period<strong>{formatDate(draft.start)} Ã¢â€ â€™ {draft.durationDays === 0 ? 'Open ended' : formatDate(end)}</strong></span></div></div>
 
         <div className="form-actions"><button className="secondary-button" onClick={() => setDrafts((items) => [...items, newDraft(items.length)])}><Plus /> Add more contract</button><button className="primary-button" onClick={() => {
           const record = created.length + 22
-          setCreated([{ id: `GH-2024-0${record}`, employee: person ? person.name : 'Unassigned', kind: draft.kind, start: draft.start, end: end || 'Open ended', days: draft.durationDays, salary: draft.salary || (person ? person.salary : 'â€”'), status: 'Pending signature', signed: 'Awaiting employee signature', file: draft.files[0]?.name ?? 'No document attached' }, ...created])
+          setCreated([{ id: `GH-2024-0${record}`, employee: person ? person.name : 'Unassigned', kind: draft.kind, start: draft.start, end: end || 'Open ended', days: draft.durationDays, salary: draft.salary || (person ? person.salary : 'Ã¢â‚¬â€'), status: 'Pending signature', signed: 'Awaiting employee signature', file: draft.files[0]?.name ?? 'No document attached' }, ...created])
           setDrafts([newDraft(0)])
           setSaved(true)
           pushNotice({ kind: 'contract', title: `Contract sent to ${person ? person.name : 'employee'}`, detail: `${draft.kind} starting ${draft.start} was sent for signature.`, actor: 'Jordan Davis', time: 'Just now', audience: 'Both' })
@@ -860,7 +879,7 @@ function ContractsPage() {
 
     <div className="panel">
       <div className="panel-heading"><div><p className="eyebrow">{created.length} ON RECORD</p><h2>All contracts</h2></div></div>
-      <div className="profile-table"><div className="profile-table-row profile-table-head"><span>Reference</span><span>Employee</span><span>Period</span><span>Salary</span><span>Status</span><span /></div>{created.map((contract) => <div className="profile-table-row" key={contract.id}><strong>{contract.id}</strong><span>{contract.employee}</span><span>{formatDate(contract.start)} â†’ {contract.end === 'Open ended' ? 'Open ended' : formatDate(contract.end)}</span><span>{contract.salary}</span><span className="status-pill">{contract.status}</span><button className="ghost-icon" onClick={() => setOpenId(contract.id)} aria-label={`View ${contract.id}`}><Eye /></button></div>)}</div>
+      <div className="profile-table"><div className="profile-table-row profile-table-head"><span>Reference</span><span>Employee</span><span>Period</span><span>Salary</span><span>Status</span><span /></div>{created.map((contract) => <div className="profile-table-row" key={contract.id}><strong>{contract.id}</strong><span>{contract.employee}</span><span>{formatDate(contract.start)} Ã¢â€ â€™ {contract.end === 'Open ended' ? 'Open ended' : formatDate(contract.end)}</span><span>{contract.salary}</span><span className="status-pill">{contract.status}</span><button className="ghost-icon" onClick={() => setOpenId(contract.id)} aria-label={`View ${contract.id}`}><Eye /></button></div>)}</div>
     </div>
   </section>
 }
@@ -871,13 +890,13 @@ function ContractDetailPage({ contract, onBack }: { contract: SeededContract; on
   return <section className="management-page profile-page">
     <button className="back-link" onClick={onBack}><ChevronDown /> Back to contracts</button>
     <div className="panel contract-hero">
-      <div className="profile-hero-main"><div className="avatar avatar-large avatar-sand">{contract.employee.split(' ').map((part) => part[0]).join('')}</div><div><p className="eyebrow">{contract.id}</p><h1>{contract.kind}</h1><p className="muted-copy">{contract.employee} Â· {contract.signed}</p><div className="profile-hero-tags"><span className="status-pill">{contract.status}</span><span className="status-pill">{formatDate(contract.start)} â†’ {contract.end === 'Open ended' ? 'Open ended' : formatDate(contract.end)}</span></div></div></div>
+      <div className="profile-hero-main"><div className="avatar avatar-large avatar-sand">{contract.employee.split(' ').map((part) => part[0]).join('')}</div><div><p className="eyebrow">{contract.id}</p><h1>{contract.kind}</h1><p className="muted-copy">{contract.employee} Ã‚Â· {contract.signed}</p><div className="profile-hero-tags"><span className="status-pill">{contract.status}</span><span className="status-pill">{formatDate(contract.start)} Ã¢â€ â€™ {contract.end === 'Open ended' ? 'Open ended' : formatDate(contract.end)}</span></div></div></div>
       <div className="form-actions"><button className="secondary-button" onClick={() => window.print()}><Download /> Export as PDF</button><button className="primary-button" onClick={() => window.print()}><FileText /> Download contract</button></div>
     </div>
     <div className="count-widget-row count-widget-row-4"><CountWidget value={contract.salary} hint="base salary" tone="tone-gold" icon={WalletCards} foot="Monthly gross before deductions" /><CountWidget value={`${contract.days} days`} hint="contract duration" tone="tone-blue" icon={Clock3} foot="Agreed term length" /><CountWidget value={formatDate(contract.start)} hint="start date" tone="tone-green" icon={CalendarDays} foot="Agreement commences" /><CountWidget value={contract.end === 'Open ended' ? 'Open ended' : formatDate(contract.end)} hint="end date" tone="tone-rose" icon={FileCheck2} foot={contract.status === 'Renewal due' ? 'Renewal window open' : 'Confirmed end of term'} /></div>
     <div className="contract-columns">
       <article className="panel"><div className="panel-heading"><div><p className="eyebrow">TERMS</p><h2>Agreement overview</h2></div></div><div className="detail-fields profile-fields">{[['Employee', contract.employee], ['Contract type', contract.kind], ['Reference', contract.id], ['Signature status', contract.signed], ['Base salary', contract.salary], ['Annual leave', '21 days per year'], ['Working hours', '40 hours per week'], ['Notice period', '30 days']].map(([label, value]) => <div className="detail-field" key={label}><small>{label}</small><strong>{value}</strong></div>)}</div></article>
-      <article className="panel"><div className="panel-heading"><div><p className="eyebrow">DOCUMENT</p><h2>Attached file</h2></div><button className="secondary-button" onClick={() => window.print()}><Download /> Download</button></div><div className="profile-document"><div className="department-icon"><FileText /></div><div><strong>{contract.file}</strong><span>PDF document Â· 412 KB</span></div></div><div className="profile-note"><ShieldCheck /><div><strong>Securely stored</strong><p>Only HR administrators and the contract owner can access this document.</p></div></div></article>
+      <article className="panel"><div className="panel-heading"><div><p className="eyebrow">DOCUMENT</p><h2>Attached file</h2></div><button className="secondary-button" onClick={() => window.print()}><Download /> Download</button></div><div className="profile-document"><div className="department-icon"><FileText /></div><div><strong>{contract.file}</strong><span>PDF document Ã‚Â· 412 KB</span></div></div><div className="profile-note"><ShieldCheck /><div><strong>Securely stored</strong><p>Only HR administrators and the contract owner can access this document.</p></div></div></article>
     </div>
   </section>
 }
@@ -885,15 +904,15 @@ function ContractDetailPage({ contract, onBack }: { contract: SeededContract; on
 function EmployeeContractPage() {
   const [status, setStatus] = useState<'Awaiting signature' | 'Accepted' | 'Declined'>('Awaiting signature')
   const [open, setOpen] = useState(false)
-  const contract = { id: 'GH-2024-018', employee: 'Amara Okafor', kind: 'Full time employment', start: '2024-07-01', end: '2027-06-30', days: 1095, salary: 'TSh 4,860,000', status, signed: status === 'Accepted' ? 'Signed today' : 'Awaiting your signature', file: 'Employment Agreement Â· Amara Okafor.pdf' }
+  const contract = { id: 'GH-2024-018', employee: 'Amara Okafor', kind: 'Full time employment', start: '2024-07-01', end: '2027-06-30', days: 1095, salary: 'TSh 4,860,000', status, signed: status === 'Accepted' ? 'Signed today' : 'Awaiting your signature', file: 'Employment Agreement Ã‚Â· Amara Okafor.pdf' }
   if (open) return <ContractDetailPage contract={contract} onBack={() => setOpen(false)} />
   return <section className="management-page profile-page">
     <div className="workspace-hero"><div><p className="eyebrow">EMPLOYMENT</p><h1>My contract</h1><p>Review your current employment agreement, terms, and signed documents.</p></div></div>
     <article className="panel contract-card-contract">
       <div className="contract-card-head"><div className="department-icon"><FileCheck2 /></div><div><p className="eyebrow">{contract.id}</p><h2>{contract.kind}</h2><p className="muted-copy">{contract.signed}</p></div><span className={`status-pill ${status === 'Accepted' ? 'ok' : status === 'Declined' ? 'off' : ''}`}>{status}</span></div>
       <div className="detail-fields profile-fields">{[['Start date', formatDate(contract.start)], ['End date', formatDate(contract.end)], ['Base salary', contract.salary], ['Annual leave', '21 days'], ['Notice period', '30 days'], ['Working hours', '40 hours per week']].map(([label, value]) => <div className="detail-field" key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>
-      <div className="profile-note"><FileText /><div><strong>{contract.file}</strong><p>PDF document Â· 412 KB Â· issued by GoldenHR People Operations</p></div></div>
-      <div className="form-actions"><button className="secondary-button" onClick={() => setOpen(true)}><Eye /> View contract</button><button className="secondary-button" onClick={() => window.print()}><Download /> Download</button>{status === 'Awaiting signature' ? <><button className="primary-button" onClick={() => setStatus('Accepted')}><FileCheck2 /> Accept contract</button><button className="secondary-button" onClick={() => setStatus('Declined')}><X /> Decline</button></> : <span className="muted-copy">Decision recorded Â· {status.toLowerCase()}</span>}</div>
+      <div className="profile-note"><FileText /><div><strong>{contract.file}</strong><p>PDF document Ã‚Â· 412 KB Ã‚Â· issued by GoldenHR People Operations</p></div></div>
+      <div className="form-actions"><button className="secondary-button" onClick={() => setOpen(true)}><Eye /> View contract</button><button className="secondary-button" onClick={() => window.print()}><Download /> Download</button>{status === 'Awaiting signature' ? <><button className="primary-button" onClick={() => setStatus('Accepted')}><FileCheck2 /> Accept contract</button><button className="secondary-button" onClick={() => setStatus('Declined')}><X /> Decline</button></> : <span className="muted-copy">Decision recorded Ã‚Â· {status.toLowerCase()}</span>}</div>
     </article>
   </section>
 }
@@ -924,9 +943,9 @@ const documentCategories = ['All', 'Contract', 'Identity', 'Registration', 'Payr
 
 function DocumentPreview({ item, employee, onClose }: { item: EmployeeDocument; employee: typeof employeeRecords[number]; onClose: () => void }) {
   return <AppModal
-    eyebrow={item.category + ' · ' + item.type}
+    eyebrow={item.category + ' Â· ' + item.type}
     title={item.name}
-    meta={item.id + ' · ' + item.employee + ' · ' + item.size + ' · added ' + item.added}
+    meta={item.id + ' Â· ' + item.employee + ' Â· ' + item.size + ' Â· added ' + item.added}
     icon={item.type === 'Image' ? FolderOpen : FileText}
     status={item.status}
     statusTone={item.status === 'Verified' ? 'ok' : 'warn'}
@@ -947,10 +966,10 @@ function DocumentPreview({ item, employee, onClose }: { item: EmployeeDocument; 
       {item.type === 'Image' ? <img src="/icon.svg" alt={'Preview of ' + item.name} /> : <div className="document-sheet">
         <div className="document-sheet-head"><div className="brand-mark"><GoldMark /></div><div><strong>GOLDENHR</strong><span>People, elevated.</span></div></div>
         <h3>{item.name.replace(/\.[a-z]+$/i, '')}</h3>
-        <p className="document-sheet-meta">Employee: {item.employee} · {employee.role} · {employee.department}</p>
+        <p className="document-sheet-meta">Employee: {item.employee} Â· {employee.role} Â· {employee.department}</p>
         <div className="document-sheet-lines">{[100, 92, 96, 70, 88, 94, 60, 90, 84, 72].map((width, index) => <i key={index} style={{ width: width + '%' }} />)}</div>
         <div className="document-sheet-sign"><span>Employee signature</span><span>Authorised signature</span></div>
-        <p className="document-sheet-foot">Document reference {item.id} · issued by GoldenHR People Operations · verified record</p>
+        <p className="document-sheet-foot">Document reference {item.id} Â· issued by GoldenHR People Operations Â· verified record</p>
       </div>}
     </div>
   </AppModal>
@@ -1004,7 +1023,7 @@ function DocumentsPage() {
         return <article className="panel document-group" key={record.email}>
           <div className="document-group-head">
             <div className={`avatar avatar-sand ${['saffron', 'olive', 'plum', 'clay'][employeeRecords.indexOf(record) % 4]}`}>{record.name.split(' ').map((part) => part[0]).join('')}</div>
-            <div><strong>{record.name}</strong><span>{record.role} Â· {record.department} Â· {record.nida}</span></div>
+            <div><strong>{record.name}</strong><span>{record.role} Ã‚Â· {record.department} Ã‚Â· {record.nida}</span></div>
             <span className="status-pill">{items.length} document{items.length === 1 ? '' : 's'}</span>
           </div>
           <div className="profile-table"><div className="profile-table-row profile-table-head"><span>Document</span><span>Category</span><span>Type</span><span>Size</span><span>Status</span><span>Added</span><span /></div>
@@ -1044,7 +1063,7 @@ const initialMoneyRequests: MoneyRequest[] = [
   { id: 'MR-2024-117', employee: 'Liam Chen', initials: 'LC', tone: 'clay', kind: 'Emergency advance', amount: 1250000, reason: 'Family medical emergency. Discharge invoice and prescription attached.', neededBy: '2024-07-05', method: 'Mobile money', status: 'Pending', submitted: 'Yesterday, 4:02 PM', decidedBy: '', decidedOn: '', note: '', receiptNo: 'RCP-2024-0917' },
   { id: 'MR-2024-116', employee: 'Sofia Martin', initials: 'SM', tone: 'plum', kind: 'Salary advance', amount: 900000, reason: 'Advance against the July payroll to cover a deposit on a new apartment.', neededBy: '2024-07-01', method: 'Bank transfer', status: 'Approved', submitted: 'Jun 24, 2024', decidedBy: 'Sofia Martin', decidedOn: 'Jun 25, 2024', note: 'Approved against the July payroll run.', receiptNo: 'RCP-2024-0916' },
   { id: 'MR-2024-115', employee: 'Noah Williams', initials: 'NW', tone: 'olive', kind: 'Travel allowance', amount: 2100000, reason: 'Travel and accommodation for the Arusha engineering offsite.', neededBy: '2024-06-20', method: 'Bank transfer', status: 'Paid', submitted: 'Jun 10, 2024', decidedBy: 'Jordan Davis', decidedOn: 'Jun 11, 2024', note: 'Paid on the June payroll cycle.', receiptNo: 'RCP-2024-0915' },
-  { id: 'MR-2024-114', employee: 'Luca Rossi', initials: 'LR', tone: 'olive', kind: 'Expense reimbursement', amount: 320000, reason: 'Conference ticket and local transport.', neededBy: '2024-06-18', method: 'Mobile money', status: 'Declined', submitted: 'Jun 14, 2024', decidedBy: 'Sofia Martin', decidedOn: 'Jun 15, 2024', note: 'Declined â€” the conference is covered by the learning budget.', receiptNo: 'RCP-2024-0914' },
+  { id: 'MR-2024-114', employee: 'Luca Rossi', initials: 'LR', tone: 'olive', kind: 'Expense reimbursement', amount: 320000, reason: 'Conference ticket and local transport.', neededBy: '2024-06-18', method: 'Mobile money', status: 'Declined', submitted: 'Jun 14, 2024', decidedBy: 'Sofia Martin', decidedOn: 'Jun 15, 2024', note: 'Declined Ã¢â‚¬â€ the conference is covered by the learning budget.', receiptNo: 'RCP-2024-0914' },
 ]
 
 function ReceiptSheet({ request, onPrint }: { request: MoneyRequest; onPrint: () => void }) {
@@ -1056,8 +1075,8 @@ function ReceiptSheet({ request, onPrint }: { request: MoneyRequest; onPrint: ()
     </div>
     <div className="receipt-title"><h2>Money request receipt</h2><p>Issued {request.submitted}</p></div>
     <div className="receipt-parties">
-      <div><small>REQUESTED BY</small><strong>{request.employee}</strong><span>{person ? `${person.role} Â· ${person.department}` : 'Employee'}</span><span>{person?.nida ?? 'â€”'}</span></div>
-      <div><small>ISSUED BY</small><strong>GoldenHR People Operations</strong><span>{request.decidedBy || 'Pending approval'}</span><span>{person ? `${person.phone}` : 'â€”'}</span></div>
+      <div><small>REQUESTED BY</small><strong>{request.employee}</strong><span>{person ? `${person.role} Ã‚Â· ${person.department}` : 'Employee'}</span><span>{person?.nida ?? 'Ã¢â‚¬â€'}</span></div>
+      <div><small>ISSUED BY</small><strong>GoldenHR People Operations</strong><span>{request.decidedBy || 'Pending approval'}</span><span>{person ? `${person.phone}` : 'Ã¢â‚¬â€'}</span></div>
     </div>
     <div className="receipt-table">
       <div className="receipt-row receipt-row-head"><span>Description</span><span>Amount</span></div>
@@ -1069,11 +1088,11 @@ function ReceiptSheet({ request, onPrint }: { request: MoneyRequest; onPrint: ()
     <div className="receipt-reason"><small>REASON GIVEN</small><p>{request.reason}</p></div>
     <div className="receipt-status">
       <span className={`status-pill ${request.status === 'Paid' ? 'ok' : request.status === 'Declined' ? 'off' : ''}`}>{request.status}</span>
-      {request.decidedOn && <p>{request.status} by {request.decidedBy} on {request.decidedOn}{request.note ? ` â€” ${request.note}` : ''}</p>}
+      {request.decidedOn && <p>{request.status} by {request.decidedBy} on {request.decidedOn}{request.note ? ` Ã¢â‚¬â€ ${request.note}` : ''}</p>}
       {!request.decidedOn && <p>Awaiting a decision from the People Operations team.</p>}
     </div>
     <div className="receipt-sign"><div><span>Employee signature</span></div><div><span>Authorised signature</span></div></div>
-    <p className="receipt-foot">This receipt confirms a money request submitted through GoldenHR. Retain it for your records. Reference {request.id} Â· {request.receiptNo}</p>
+    <p className="receipt-foot">This receipt confirms a money request submitted through GoldenHR. Retain it for your records. Reference {request.id} Ã‚Â· {request.receiptNo}</p>
     <div className="form-actions no-print"><button className="secondary-button" onClick={onPrint}><Download /> Download receipt</button><button className="primary-button" onClick={() => window.print()}><FileText /> Export as PDF</button></div>
   </article>
 }
@@ -1082,7 +1101,7 @@ function MoneyRequestDetail({ request, onBack, isEmployee }: { request: MoneyReq
   return <section className="management-page profile-page">
     <button className="back-link" onClick={onBack}><ChevronDown /> Back to money requests</button>
     <div className="panel profile-hero">
-      <div className="profile-hero-main"><div className={`avatar avatar-large ${request.tone}`}>{request.initials}</div><div><p className="eyebrow">{request.id} Â· {request.receiptNo}</p><h1>{request.kind}</h1><p className="muted-copy">{request.employee} Â· {money(request.amount)} Â· submitted {request.submitted}</p><div className="profile-hero-tags"><span className={`status-pill ${request.status === 'Paid' ? 'ok' : request.status === 'Declined' ? 'off' : ''}`}>{request.status}</span><span className="status-pill">{request.method}</span></div></div></div>
+      <div className="profile-hero-main"><div className={`avatar avatar-large ${request.tone}`}>{request.initials}</div><div><p className="eyebrow">{request.id} Ã‚Â· {request.receiptNo}</p><h1>{request.kind}</h1><p className="muted-copy">{request.employee} Ã‚Â· {money(request.amount)} Ã‚Â· submitted {request.submitted}</p><div className="profile-hero-tags"><span className={`status-pill ${request.status === 'Paid' ? 'ok' : request.status === 'Declined' ? 'off' : ''}`}>{request.status}</span><span className="status-pill">{request.method}</span></div></div></div>
       {!isEmployee && request.status === 'Pending' && <div className="form-actions"><button className="secondary-button" onClick={onBack}><X /> Decline</button><button className="primary-button" onClick={onBack}><FileCheck2 /> Approve</button></div>}
     </div>
     <ReceiptSheet request={request} onPrint={() => window.print()} />
@@ -1120,7 +1139,7 @@ const record = requests.find((item) => item.id === id)
   if (isEmployee && creating) return <section className="form-page">
     <button className="back-link" onClick={() => setCreating(false)}><ChevronDown /> Back to money requests</button>
     <div className="workspace-hero"><div><p className="eyebrow">FINANCE</p><h1>Request money</h1><p>Send an advance or claim to People Operations and track the decision.</p></div></div>
-    <div className="leave-balance money-limit"><CircleDollarSign /><div><strong>{money(available)} available</strong><p>Advance limit {money(advanceLimit)} Â· {money(requested)} already requested</p></div></div>
+    <div className="leave-balance money-limit"><CircleDollarSign /><div><strong>{money(available)} available</strong><p>Advance limit {money(advanceLimit)} Ã‚Â· {money(requested)} already requested</p></div></div>
     <form className="panel" onSubmit={(event) => { event.preventDefault(); const value = Number(amount); if (!value) return; setRequests([{ id: `MR-2024-${119 + mine.length}`, employee: me, initials: 'AO', tone: 'saffron', kind, amount: value, reason, neededBy, method, status: 'Pending', submitted: 'Just now', decidedBy: '', decidedOn: '', note: '', receiptNo: `RCP-2024-${919 + mine.length}` }, ...requests]); setAmount(''); setReason(''); setNeededBy(''); setCreating(false); setNotice('Money request submitted'); pushNotice({ kind: 'money', title: 'New money request from Amara Okafor', detail: `A ${kind.toLowerCase()} of ${money(Number(amount))} was sent to People Operations for approval.`, actor: 'Amara Okafor', time: 'Just now', audience: 'HR' }) }}>
       <div className="form-grid">
         <Field label="Request type"><select value={kind} onChange={(event) => setKind(event.target.value as MoneyRequestKind)}>{moneyKinds.map((item) => <option key={item}>{item}</option>)}</select></Field>
@@ -1128,7 +1147,7 @@ const record = requests.find((item) => item.id === id)
         <Field label="Needed by"><input type="date" value={neededBy} onChange={(event) => setNeededBy(event.target.value)} /></Field>
         <Field label="Payment method"><select value={method} onChange={(event) => setMethod(event.target.value)}><option>Mobile money</option><option>Bank transfer</option><option>Cash</option></select></Field>
         <Field label="Reason for the request" full><textarea required rows={4} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain what the money is for and attach any supporting detail" /></Field>
-        {amount && <Field label="Remaining after approval" full><div className="leave-balance money-limit"><Sparkles /><div><strong>{money(Math.max(0, available - Number(amount)))} remaining</strong><p>{kind} Â· {neededBy ? `needed by ${formatDate(neededBy)}` : 'add a date'}</p></div></div></Field>}
+        {amount && <Field label="Remaining after approval" full><div className="leave-balance money-limit"><Sparkles /><div><strong>{money(Math.max(0, available - Number(amount)))} remaining</strong><p>{kind} Ã‚Â· {neededBy ? `needed by ${formatDate(neededBy)}` : 'add a date'}</p></div></div></Field>}
       </div>
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setCreating(false)}>Cancel</button><button className="primary-button" type="submit"><CircleDollarSign /> Send request to HR</button></div>
     </form>
@@ -1173,7 +1192,7 @@ function RegistrationInfo({ person, mode, onBack, onSaved }: { person: ProfileRe
   const isSelf = mode === 'self'
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [values, setValues] = useState({ name: person.name, email: person.email, phone: person.phone, birth: '1996-04-18', start: toIsoDate(person.hire), hire: toIsoDate(person.hire), nida: person.nida, tin: 'TIN-4482-9917', address: 'Mbeachibe Beach Road, Dar es Salaam', emergency: 'Grace Okafor · +255 712 900 114', bank: 'CRDB 0001 2345 6789 01' })
+  const [values, setValues] = useState({ name: person.name, email: person.email, phone: person.phone, birth: '1996-04-18', start: toIsoDate(person.hire), hire: toIsoDate(person.hire), nida: person.nida, tin: 'TIN-4482-9917', address: 'Mbeachibe Beach Road, Dar es Salaam', emergency: 'Grace Okafor Â· +255 712 900 114', bank: 'CRDB 0001 2345 6789 01' })
   const [documents, setDocuments] = useState(employeeDocuments)
   const set = (patch: Partial<typeof values>) => setValues((current) => ({ ...current, ...patch }))
   const tone = employeeRecords.indexOf(person) % 4
@@ -1191,7 +1210,7 @@ function RegistrationInfo({ person, mode, onBack, onSaved }: { person: ProfileRe
 
   return <section className="management-page profile-page">
     <button className="back-link" onClick={onBack}><ChevronDown /> {isSelf ? 'Back to workspace' : `Back to employee management`}</button>
-    <div className="workspace-hero"><div><p className="eyebrow">{isSelf ? 'Personal details' : 'People directory'}</p><h1>{isSelf ? 'Registration info' : `${person.name} · registration`}</h1><p>{isSelf ? 'Your personal, legal and banking details as held on your employee record.' : `Personal, legal and banking details on file for ${person.name}.`}</p></div>{!editing && <button className="primary-button" onClick={() => setEditing(true)}><Pencil /> Edit information</button>}</div>
+    <div className="workspace-hero"><div><p className="eyebrow">{isSelf ? 'Personal details' : 'People directory'}</p><h1>{isSelf ? 'Registration info' : `${person.name} Â· registration`}</h1><p>{isSelf ? 'Your personal, legal and banking details as held on your employee record.' : `Personal, legal and banking details on file for ${person.name}.`}</p></div>{!editing && <button className="primary-button" onClick={() => setEditing(true)}><Pencil /> Edit information</button>}</div>
     {saved && <div className="panel contract-saved"><Sparkles /><div><strong>Registration info updated</strong><p>{isSelf ? 'People Operations has been notified of your changes.' : `Changes were written to ${person.name}'s record in the people directory.`}</p></div></div>}
 
     <article className="panel reg-hero">
@@ -1200,7 +1219,7 @@ function RegistrationInfo({ person, mode, onBack, onSaved }: { person: ProfileRe
         <div className="reg-hero-copy">
           <p className="eyebrow">Employee profile</p>
           <h1>{values.name}</h1>
-          <p className="muted-copy">{person.role} · {person.department} · {person.type}</p>
+          <p className="muted-copy">{person.role} Â· {person.department} Â· {person.type}</p>
           <div className="profile-hero-tags"><span className="status-pill ok">Active</span><span className="status-pill">Hired {formatDate(values.hire)}</span><span className="status-pill">Verified</span></div>
         </div>
         <div className="reg-hero-meta">
@@ -1211,7 +1230,7 @@ function RegistrationInfo({ person, mode, onBack, onSaved }: { person: ProfileRe
       </div>
       <div className="reg-progress">
         <div><span style={{ width: '92%' }} /></div>
-        <p>Profile completeness <strong>92%</strong> · add the bank confirmation to finish</p>
+        <p>Profile completeness <strong>92%</strong> Â· add the bank confirmation to finish</p>
       </div>
     </article>
 
@@ -1260,7 +1279,7 @@ function RegistrationInfo({ person, mode, onBack, onSaved }: { person: ProfileRe
       <aside className="reg-side">
         <article className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Attached documents</p><h2>On this record</h2></div><span className="report-chip">{docTotal} files</span></div><div className="doc-summary"><div><small>Total files</small><strong>{docTotal}</strong></div><div><small>PDF</small><strong>{docPdfs}</strong></div><div><small>Images</small><strong>{docImages}</strong></div><div><small>Verified</small><strong>{docVerified}</strong></div></div>
-          <div className="reg-documents">{documents.map((item) => <div className="profile-document" key={item.id}><span className={`document-type-icon ${item.type === 'Image' ? 'is-image' : 'is-pdf'}`}>{item.type === 'Image' ? <FolderOpen /> : <FileText />}</span><div><strong>{item.name}</strong><span>{item.kind} · {item.size} · {item.added}</span></div><span className={`status-pill ${item.status === 'Verified' ? 'ok' : ''}`}>{item.status}</span><div className="employee-actions"><button onClick={() => window.print()} aria-label={`Download ${item.name}`}><Download /></button><button onClick={() => setDocuments(documents.filter((entry) => entry.id !== item.id))} aria-label={`Remove ${item.name}`}><Trash2 /></button></div></div>)}</div>
+          <div className="reg-documents">{documents.map((item) => <div className="profile-document" key={item.id}><span className={`document-type-icon ${item.type === 'Image' ? 'is-image' : 'is-pdf'}`}>{item.type === 'Image' ? <FolderOpen /> : <FileText />}</span><div><strong>{item.name}</strong><span>{item.kind} Â· {item.size} Â· {item.added}</span></div><span className={`status-pill ${item.status === 'Verified' ? 'ok' : ''}`}>{item.status}</span><div className="employee-actions"><button onClick={() => window.print()} aria-label={`Download ${item.name}`}><Download /></button><button onClick={() => setDocuments(documents.filter((entry) => entry.id !== item.id))} aria-label={`Remove ${item.name}`}><Trash2 /></button></div></div>)}</div>
           <button className="secondary-button reg-upload" onClick={() => setDocuments([...documents, { id: `ED-${documents.length + 1}`, name: 'bank-confirmation.pdf', kind: 'Registration', type: 'PDF', size: '188 KB', added: 'Today', status: 'Pending review' }])}><Upload /> Upload document</button>
         </article>
         <article className="panel reg-support"><div className="department-icon"><LifeBuoy /></div><div><strong>{isSelf ? 'Need a change?' : 'Verification note'}</strong><p>{isSelf ? 'Legal name, NIDA and TIN changes need a supporting document. Email people@goldenhr.com.' : 'Name, NIDA and TIN edits are recorded against the employee record with your administrator ID.'}</p></div></article>
@@ -1297,7 +1316,7 @@ const initialNotices: NoticeItem[] = [
   { id: 'N-107', kind: 'employee', title: 'New employee added', detail: 'Luca Rossi joined the Design department as Product Designer.', actor: 'Jordan Davis', time: 'Mon, 11:08 AM', audience: 'HR', read: true },
   { id: 'N-108', kind: 'document', title: 'Document uploaded to your record', detail: 'Employment agreement 2023.pdf was added to your profile.', actor: 'Sofia Martin', time: 'Sun, 3:45 PM', audience: 'Employee', read: true },
   { id: 'N-109', kind: 'security', title: 'Password changed', detail: 'Your portal password was reset successfully from the settings page.', actor: 'You', time: 'Fri, 9:02 AM', audience: 'Both', read: true },
-  { id: 'N-110', kind: 'leave', title: 'Leave request approved', detail: 'Annual leave for Jul 18 â€“ Jul 22 was approved by Sofia Martin.', actor: 'Sofia Martin', time: 'Thu, 2:30 PM', audience: 'Employee', read: true },
+  { id: 'N-110', kind: 'leave', title: 'Leave request approved', detail: 'Annual leave for Jul 18 Ã¢â‚¬â€œ Jul 22 was approved by Sofia Martin.', actor: 'Sofia Martin', time: 'Thu, 2:30 PM', audience: 'Employee', read: true },
 ]
 
 let noticeStore: NoticeItem[] = initialNotices
@@ -1341,7 +1360,7 @@ function NotificationsPage({ isEmployee, notices, setNotices }: { isEmployee: bo
       <div className="notification-list">
         {visible.map((item) => { const Icon = kindMeta[item.kind].icon; return <article className={`notification-row ${item.read ? '' : 'unread'}`} key={item.id}>
           <span className={`notification-icon ${item.kind}`}><Icon /></span>
-          <div className="notification-copy"><div className="notification-head"><strong>{item.title}</strong><span className="notification-kind">{kindMeta[item.kind].label}</span>{!item.read && <i className="notification-dot" />}</div><p>{item.detail}</p><span className="notification-meta">{item.actor} Â· {item.time}</span></div>
+          <div className="notification-copy"><div className="notification-head"><strong>{item.title}</strong><span className="notification-kind">{kindMeta[item.kind].label}</span>{!item.read && <i className="notification-dot" />}</div><p>{item.detail}</p><span className="notification-meta">{item.actor} Ã‚Â· {item.time}</span></div>
           <div className="employee-actions"><button onClick={() => setNotices((items) => items.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry)))} aria-label={`Mark ${item.title} as read`}><FileCheck2 /></button><button onClick={() => setNotices((items) => items.filter((entry) => entry.id !== item.id))} aria-label={`Dismiss ${item.title}`}><Trash2 /></button></div>
         </article> })}
         {visible.length === 0 && <div className="leave-empty"><Bell /><p>No notifications in this category.</p></div>}
@@ -1405,7 +1424,7 @@ function SettingsPage({ isEmployee, credentials, setCredentials, theme, setTheme
       <div className="reg-main">
         <article className="panel">
           <div className="panel-heading"><div><p className="eyebrow">LOGIN CREDENTIALS</p><h2>Your account</h2></div><span className="status-pill ok">{isEmployee ? 'Employee access' : 'HR administrator'}</span></div>
-          <div className="profile-hero-main settings-identity"><div className="avatar avatar-sand">{isEmployee ? 'AO' : 'JD'}</div><div><strong>{isEmployee ? 'Amara Okafor' : 'Jordan Davis'}</strong><p className="muted-copy">{isEmployee ? 'Product Designer Â· Design' : 'HR Administrator Â· People Operations'}</p></div></div>
+          <div className="profile-hero-main settings-identity"><div className="avatar avatar-sand">{isEmployee ? 'AO' : 'JD'}</div><div><strong>{isEmployee ? 'Amara Okafor' : 'Jordan Davis'}</strong><p className="muted-copy">{isEmployee ? 'Product Designer Ã‚Â· Design' : 'HR Administrator Ã‚Â· People Operations'}</p></div></div>
           <div className="detail-fields profile-fields">
             <div className="detail-field"><small>Email address (username)</small><input value={credentials.email} onChange={(event) => setCredentials((value) => ({ ...value, email: event.target.value }))} /></div>
             <div className="detail-field"><small>Current password</small><input type={passwords.visible ? 'text' : 'password'} value={current} onChange={(event) => setCurrent(event.target.value)} placeholder="Enter current password" /></div>
@@ -1638,7 +1657,7 @@ function PayrollReportPage({ onBack }: { onBack: () => void }) {
             <p className="report-balance-label">Net paid</p>
             <h2>{compact(yearNet)}</h2>
             <div className="report-area">{(reportData.map((entry, index) => entry.payrollNet)).map((value, index) => <i key={index} style={{ height: `${Math.max(6, (value / Math.max(...reportData.map((e) => e.payrollNet))) * 100)}%` }} />)}</div>
-            <div className="report-card-foot"><span>Paid {reportData[0].month} â€“ {row.month}</span></div>
+            <div className="report-card-foot"><span>Paid {reportData[0].month} Ã¢â‚¬â€œ {row.month}</span></div>
           </article>
         </div>
 
@@ -1698,7 +1717,7 @@ function ReportsPage() {
     return <section className="management-page report-inner">
       <button className="back-link" onClick={() => setOpenIndex(null)}><ChevronDown /> Back to reports</button>
       <div className="panel report-inner-hero">
-        <div><p className="eyebrow">{REPORT_YEAR} DETAIL</p><h1>{detail.month} {REPORT_YEAR}</h1><p className="muted-copy">{detail.headcount} employees Â· {detail.docsAdded} documents added Â· {detail.employeesAdded} joined</p></div>
+        <div><p className="eyebrow">{REPORT_YEAR} DETAIL</p><h1>{detail.month} {REPORT_YEAR}</h1><p className="muted-copy">{detail.headcount} employees Ã‚Â· {detail.docsAdded} documents added Ã‚Â· {detail.employeesAdded} joined</p></div>
         <div className="form-actions"><button className="secondary-button" onClick={() => window.print()}><Download /> Export PDF</button><button className="primary-button" onClick={() => window.print()}><FileText /> Full report</button></div>
       </div>
       <div className="count-widget-row">
@@ -1777,12 +1796,12 @@ function EmployeeDashboard() {
   const approvedMoney = 900000
 
   const activity: ActivityRow[] = [
-    { id: 'PR-2024-065', title: 'Payslip issued', meta: 'June 2026 payslip', amount: compact(4860000), status: 'Verified', time: 'Jun 28 Â· 09:42', kind: 'payroll' },
-    { id: 'MR-2024-118', title: 'Money request', meta: 'Expense reimbursement', amount: '486K', status: 'Pending', time: 'Today Â· 09:14', kind: 'money' },
-    { id: 'LV-2024-041', title: 'Leave approved', meta: 'Annual leave Jul 18 â€“ Jul 22', amount: '5 days', status: 'Approved', time: 'Jun 27 Â· 16:20', kind: 'leave' },
-    { id: 'GH-2024-018', title: 'Contract updated', meta: 'Full time employment', amount: 'Active', status: 'Active', time: 'Jun 25 Â· 11:05', kind: 'contract' },
-    { id: 'DOC-002', title: 'Document uploaded', meta: 'NIDA registration card', amount: '96 KB', status: 'Verified', time: 'Jun 22 Â· 15:38', kind: 'document' },
-    { id: 'WP-2026', title: 'Goal checkpoint', meta: 'Q2 objectives review', amount: '86%', status: 'Completed', time: 'Jun 20 Â· 08:50', kind: 'leave' },
+    { id: 'PR-2024-065', title: 'Payslip issued', meta: 'June 2026 payslip', amount: compact(4860000), status: 'Verified', time: 'Jun 28 Ã‚Â· 09:42', kind: 'payroll' },
+    { id: 'MR-2024-118', title: 'Money request', meta: 'Expense reimbursement', amount: '486K', status: 'Pending', time: 'Today Ã‚Â· 09:14', kind: 'money' },
+    { id: 'LV-2024-041', title: 'Leave approved', meta: 'Annual leave Jul 18 Ã¢â‚¬â€œ Jul 22', amount: '5 days', status: 'Approved', time: 'Jun 27 Ã‚Â· 16:20', kind: 'leave' },
+    { id: 'GH-2024-018', title: 'Contract updated', meta: 'Full time employment', amount: 'Active', status: 'Active', time: 'Jun 25 Ã‚Â· 11:05', kind: 'contract' },
+    { id: 'DOC-002', title: 'Document uploaded', meta: 'NIDA registration card', amount: '96 KB', status: 'Verified', time: 'Jun 22 Ã‚Â· 15:38', kind: 'document' },
+    { id: 'WP-2026', title: 'Goal checkpoint', meta: 'Q2 objectives review', amount: '86%', status: 'Completed', time: 'Jun 20 Ã‚Â· 08:50', kind: 'leave' },
   ]
 
   return <section className="hr-dashboard">
@@ -1819,7 +1838,7 @@ function EmployeeDashboard() {
         <div className="profile-table dash-table"><div className="profile-table-row profile-table-head"><span /><span>Activity</span><span>Amount</span><span>Status</span><span>Date</span><span /></div>
           {activity.map((row) => { const Icon = kindMeta[row.kind].icon; return <div className="profile-table-row" key={row.id}>
             <span><label className="dash-check"><input type="checkbox" /><i /></label></span>
-            <span className="dash-activity-cell"><span className={`document-type-icon ${row.kind === 'money' ? 'is-image' : 'is-pdf'}`}><Icon /></span><span><strong>{row.title}</strong><small>{row.id} Â· {row.meta}</small></span></span>
+            <span className="dash-activity-cell"><span className={`document-type-icon ${row.kind === 'money' ? 'is-image' : 'is-pdf'}`}><Icon /></span><span><strong>{row.title}</strong><small>{row.id} Ã‚Â· {row.meta}</small></span></span>
             <span className="payroll-net-cell">{row.amount}</span>
             <span><span className={`status-pill ${row.status === 'Active' || row.status === 'Verified' || row.status === 'Approved' || row.status === 'Completed' ? 'ok' : ''}`}><i className="status-dot" />{row.status}</span></span>
             <span>{row.time}</span>
@@ -1949,11 +1968,33 @@ function WorkspacePage({ portal, page }: { portal: Portal; page: string }) {
     'Money request': { eyebrow: 'FINANCE', title: isEmployee ? 'Request money' : 'Money requests', description: 'Handle advances and reimbursements with a clear paper trail.', metric: isEmployee ? 'TSh 2,500,000' : '09', metricLabel: isEmployee ? 'Available limit' : 'Pending requests', action: isEmployee ? 'Create request' : 'Review requests' },
   }
   const data = pageData[page] ?? pageData['Settings']
-  return <section className="workspace-page"><div className="workspace-hero"><div><p className="eyebrow">{data.eyebrow}</p><h1>{data.title}</h1><p>{data.description}</p></div><button className="primary-button"><Plus /> {data.action}</button></div><div className="workspace-grid"><article className="panel feature-panel"><div className="feature-orbit"><Sparkles /></div><p className="eyebrow">GOLDENHR WORKSPACE</p><h2>Built for better work.</h2><p>One thoughtful place for your people, their progress, and the details that keep everything moving.</p><button className="text-button">Explore this workspace <ArrowUpRight /></button></article><article className="panel metric-panel"><p className="eyebrow">AT A GLANCE</p><strong>{data.metric}</strong><span>{data.metricLabel}</span><div className="metric-line"><i /></div><p className="muted-copy">Updated just now Â· visibility set to your role</p></article></div><div className="panel table-panel"><div className="panel-heading"><div><p className="eyebrow">RECENT ACTIVITY</p><h2>{isEmployee ? 'Your latest updates' : 'Latest workspace activity'}</h2></div><button className="more-button">View all <ArrowUpRight /></button></div>{['GoldenHR workspace is ready for your review','A new update was added to your people timeline','Your next action is waiting here'].map((item, index) => <div className="workspace-row" key={item}><div className="row-number">0{index + 1}</div><div><strong>{item}</strong><span>{index === 0 ? 'Today, 9:42 AM' : 'Yesterday'}</span></div><ArrowUpRight /></div>)}</div></section>
+  return <section className="workspace-page"><div className="workspace-hero"><div><p className="eyebrow">{data.eyebrow}</p><h1>{data.title}</h1><p>{data.description}</p></div><button className="primary-button"><Plus /> {data.action}</button></div><div className="workspace-grid"><article className="panel feature-panel"><div className="feature-orbit"><Sparkles /></div><p className="eyebrow">GOLDENHR WORKSPACE</p><h2>Built for better work.</h2><p>One thoughtful place for your people, their progress, and the details that keep everything moving.</p><button className="text-button">Explore this workspace <ArrowUpRight /></button></article><article className="panel metric-panel"><p className="eyebrow">AT A GLANCE</p><strong>{data.metric}</strong><span>{data.metricLabel}</span><div className="metric-line"><i /></div><p className="muted-copy">Updated just now Ã‚Â· visibility set to your role</p></article></div><div className="panel table-panel"><div className="panel-heading"><div><p className="eyebrow">RECENT ACTIVITY</p><h2>{isEmployee ? 'Your latest updates' : 'Latest workspace activity'}</h2></div><button className="more-button">View all <ArrowUpRight /></button></div>{['GoldenHR workspace is ready for your review','A new update was added to your people timeline','Your next action is waiting here'].map((item, index) => <div className="workspace-row" key={item}><div className="row-number">0{index + 1}</div><div><strong>{item}</strong><span>{index === 0 ? 'Today, 9:42 AM' : 'Yesterday'}</span></div><ArrowUpRight /></div>)}</div></section>
 }
 
-function LoginPage({ onLogin }: { onLogin: (portal: Portal) => void }) {
-  return <main className="login-screen"><section className="login-widget"><div className="login-brand"><div className="brand-mark"><GoldMark /></div><div><strong>GOLDENHR</strong><span>People, elevated.</span></div></div><h1>Welcome back.</h1><p>Sign in to your people workspace and keep better work moving.</p><form className="login-form" onSubmit={(event) => { event.preventDefault(); onLogin('HR') }}><div className="login-field"><label htmlFor="login-email">Email address</label><input id="login-email" type="email" placeholder="you@goldenhr.com" required /></div><div className="login-field"><label htmlFor="login-password">Password</label><input id="login-password" type="password" placeholder="Enter your password" required /></div><button className="login-submit" type="submit">Sign in to GoldenHR</button></form><div className="login-portals"><button type="button" onClick={() => onLogin('HR')}>Enter HR portal<small>People operations</small></button><button type="button" onClick={() => onLogin('Employee')}>Enter employee portal<small>Personal workspace</small></button></div></section></main>
+function LoginPage({ onLogin }: { onLogin: (portal: Portal, user: AuthUser) => void }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  // Sign in against the API. The portal is decided by the role the backend
+  // returns, not by which button was pressed.
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError(null)
+    setBusy(true)
+
+    try {
+      const user = await login(email.trim(), password)
+      onLogin(user.is_hr ? 'HR' : 'Employee', user)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Sign in failed. Please try again.')
+      setBusy(false)
+    }
+  }
+
+  return <main className="login-screen"><section className="login-widget"><div className="login-brand"><div className="brand-mark"><GoldMark /></div><div><strong>GOLDENHR</strong><span>People, elevated.</span></div></div><h1>Welcome back.</h1><p>Sign in to your people workspace and keep better work moving.</p><form className="login-form" onSubmit={submit}><div className="login-field"><label htmlFor="login-email">Email address</label><input id="login-email" type="email" autoComplete="username" placeholder="you@goldenhr.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></div><div className="login-field"><label htmlFor="login-password">Password</label><input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div>{error && <div className="login-error" role="alert"><X />{error}</div>}<button className="login-submit" type="submit" disabled={busy}>{busy ? 'Signing inâ€¦' : 'Sign in to GoldenHR'}</button></form><p className="login-footnote">Your portal is chosen automatically from your account.</p></section></main>
 }
 
 type ActivityRow = { id: string; title: string; meta: string; amount: string; status: string; time: string; kind: NoticeKind }
@@ -2024,12 +2065,12 @@ function HrDashboard() {
   const headcountTrend = reportData.slice(0, 7).map((entry) => entry.headcount)
 
   const activity: ActivityRow[] = [
-    { id: 'PR-2024-065', title: 'Payroll created', meta: 'Liam Chen', amount: compact(current.payrollNet), status: 'Pending approval', time: `${current.month} Â· 09:42`, kind: 'payroll' },
-    { id: 'MR-2024-118', title: 'Money request', meta: 'Amara Okafor', amount: '486K', status: 'Pending', time: 'Today Â· 09:14', kind: 'money' },
-    { id: 'GH-2024-021', title: 'Contract renewed', meta: 'Liam Chen', amount: 'Part time', status: 'Active', time: 'Jun 28 Â· 16:20', kind: 'contract' },
-    { id: 'LV-2024-041', title: 'Leave request', meta: 'Amara Okafor', amount: '5 days', status: 'Pending', time: 'Jun 27 Â· 11:05', kind: 'leave' },
-    { id: 'DOC-014', title: 'Document uploaded', meta: 'Liam Chen', amount: '96 KB', status: 'Verified', time: 'Jun 26 Â· 15:38', kind: 'document' },
-    { id: 'EMP-0248', title: 'Employee added', meta: 'Amara Okafor', amount: 'Design', status: 'Active', time: 'Jun 25 Â· 08:50', kind: 'employee' },
+    { id: 'PR-2024-065', title: 'Payroll created', meta: 'Liam Chen', amount: compact(current.payrollNet), status: 'Pending approval', time: `${current.month} Ã‚Â· 09:42`, kind: 'payroll' },
+    { id: 'MR-2024-118', title: 'Money request', meta: 'Amara Okafor', amount: '486K', status: 'Pending', time: 'Today Ã‚Â· 09:14', kind: 'money' },
+    { id: 'GH-2024-021', title: 'Contract renewed', meta: 'Liam Chen', amount: 'Part time', status: 'Active', time: 'Jun 28 Ã‚Â· 16:20', kind: 'contract' },
+    { id: 'LV-2024-041', title: 'Leave request', meta: 'Amara Okafor', amount: '5 days', status: 'Pending', time: 'Jun 27 Ã‚Â· 11:05', kind: 'leave' },
+    { id: 'DOC-014', title: 'Document uploaded', meta: 'Liam Chen', amount: '96 KB', status: 'Verified', time: 'Jun 26 Ã‚Â· 15:38', kind: 'document' },
+    { id: 'EMP-0248', title: 'Employee added', meta: 'Amara Okafor', amount: 'Design', status: 'Active', time: 'Jun 25 Ã‚Â· 08:50', kind: 'employee' },
   ]
 
   return <section className="hr-dashboard">
@@ -2064,7 +2105,7 @@ function HrDashboard() {
         <div className="profile-table dash-table"><div className="profile-table-row profile-table-head"><span /><span>Activity</span><span>Amount</span><span>Status</span><span>Date</span><span /></div>
           {activity.map((row) => { const Icon = kindMeta[row.kind].icon; return <div className="profile-table-row" key={row.id}>
             <span><label className="dash-check"><input type="checkbox" /><i /></label></span>
-            <span className="dash-activity-cell"><span className={`document-type-icon ${row.kind === 'money' ? 'is-image' : 'is-pdf'}`}><Icon /></span><span><strong>{row.title}</strong><small>{row.id} Â· {row.meta}</small></span></span>
+            <span className="dash-activity-cell"><span className={`document-type-icon ${row.kind === 'money' ? 'is-image' : 'is-pdf'}`}><Icon /></span><span><strong>{row.title}</strong><small>{row.id} Ã‚Â· {row.meta}</small></span></span>
             <span className="payroll-net-cell">{row.amount}</span>
             <span><span className={`status-pill ${row.status === 'Active' || row.status === 'Verified' ? 'ok' : row.status === 'Pending' || row.status === 'Pending approval' ? '' : 'off'}`}><i className="status-dot" />{row.status}</span></span>
             <span>{row.time}</span>
@@ -2081,6 +2122,7 @@ function Dashboard({ portal }: { portal: Portal }) {
 
 export default function Page() {
   const [authenticated, setAuthenticated] = useState(false)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
   const [portal, setPortal] = useState<Portal>('HR')
   const [active, setActive] = useState('Dashboard')
   const [collapsed, setCollapsed] = useState(false)
@@ -2089,17 +2131,47 @@ export default function Page() {
   const [notices, setNotices] = useNotices()
   const [credentials, setCredentials] = useState(defaultCredentials)
   const [theme, setTheme] = useState<ThemeName>('gold')
+
+  // Restore an existing session on load instead of demanding a fresh
+  // sign-in on every refresh.
+  useEffect(() => {
+    let cancelled = false
+
+    fetchCurrentUser()
+      .then((user) => {
+        if (cancelled || !user) return
+        setCurrentUser(user)
+        setPortal(user.is_hr ? 'HR' : 'Employee')
+        setAuthenticated(true)
+      })
+      .catch(() => {
+        /* no stored session, or the API is unreachable: show the login screen */
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme) }, [theme])
   const pageTitle = useMemo(() => active === 'Dashboard' ? `${portal} dashboard` : active, [active, portal])
   const unread = notices.filter((item) => !item.read && (item.audience !== 'HR' || portal === 'HR')).length
-  if (!authenticated) return <LoginPage onLogin={(next) => { setPortal(next); setActive('Dashboard'); setAuthenticated(true) }} />
+
+  const signOut = async () => {
+    await logout()
+    setAuthenticated(false)
+    setCurrentUser(null)
+    setActive('Dashboard')
+  }
+
+  if (!authenticated) return <LoginPage onLogin={(next, user) => { setPortal(next); setCurrentUser(user); setActive('Dashboard'); setAuthenticated(true) }} />
   return <main className="app-shell">
     <div className={`mobile-overlay ${mobileOpen ? 'show' : ''}`} onClick={() => setMobileOpen(false)} />
-<div className={mobileOpen ? 'mobile-nav-open' : ''}><SideNav portal={portal} active={active} onChange={(item) => { setActive(item); setMobileOpen(false) }} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} unread={unread} /></div>{collapsed && <button className="sidebar-reopen icon-button" onClick={() => setCollapsed(false)} aria-label="Open sidebar" title="Open sidebar"><Menu /></button>}
+<div className={mobileOpen ? 'mobile-nav-open' : ''}><SideNav portal={portal} active={active} onChange={(item) => { setActive(item); setMobileOpen(false) }} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} unread={unread} user={currentUser} /></div>{collapsed && <button className="sidebar-reopen icon-button" onClick={() => setCollapsed(false)} aria-label="Open sidebar" title="Open sidebar"><Menu /></button>}
   <section className="main-area">
-      <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumb"><Grid2X2 /> <span>Workspace</span><span>/</span><strong>{pageTitle}</strong></div><div className="topbar-right"><button className="top-icon" aria-label="Search"><Search /></button><button className="top-icon notification-button" onClick={() => setActive('Notifications')} aria-label="Notifications"><Bell />{unread > 0 && <i>{unread}</i>}</button><div className="top-profile"><div className="avatar avatar-sand">JD</div><ChevronDown /></div><button className="logout-button" onClick={() => setAuthenticated(false)}><LogOut /> Logout</button></div></header>
+      <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumb"><Grid2X2 /> <span>Workspace</span><span>/</span><strong>{pageTitle}</strong></div><div className="topbar-right"><button className="top-icon" aria-label="Search"><Search /></button><button className="top-icon notification-button" onClick={() => setActive('Notifications')} aria-label="Notifications"><Bell />{unread > 0 && <i>{unread}</i>}</button><div className="top-profile"><div className="avatar avatar-sand">{initialsOf(currentUser?.name)}</div><ChevronDown /></div><button className="logout-button" onClick={signOut}><LogOut /> Logout</button></div></header>
       <div className="page-content">{active === 'Dashboard' ? <Dashboard portal={portal} /> : active === 'Add employee' && portal === 'HR' ? <AddEmployeePage editing={null} onDone={() => setActive('Employee management')} /> : active === 'Employee management' && portal === 'HR' ? <EmployeeManagementPage /> : active === 'Department & role' && portal === 'HR' ? <DepartmentRolesPage /> : active === 'Reports' ? <ReportsPage /> : active === 'Contracts' && portal === 'HR' ? <ContractsPage /> : active === 'Documents' && portal === 'HR' ? <DocumentsPage /> : active === 'Work progress' && portal === 'Employee' ? <WorkProgressPage /> : active === 'Contract' && portal === 'Employee' ? <EmployeeContractPage /> : active === 'Leave approval' && portal === 'HR' ? <LeaveApprovalPage /> : active === 'Leave request' && portal === 'Employee' ? <LeaveRequestPage /> : active === 'Payroll' && portal === 'HR' ? <PayrollCenterPage /> : active === 'Notifications' ? <NotificationsPage isEmployee={portal === 'Employee'} notices={notices} setNotices={setNotices} /> : active === 'Settings' ? <SettingsPage isEmployee={portal === 'Employee'} credentials={credentials} setCredentials={setCredentials} theme={theme} setTheme={setTheme} setNotices={setNotices} /> : active === 'Registration info' && portal === 'Employee' ? <RegistrationInfo person={employeeRecords[0]} mode="self" onBack={() => setActive('Dashboard')} /> : active === 'Payslip' && portal === 'Employee' ? <EmployeePayslipsPage /> : active === 'Money request' ? <MoneyRequestPage isEmployee={portal === 'Employee'} requests={moneyRequests} setRequests={setMoneyRequests} /> : <WorkspacePage portal={portal} page={active} />}</div>
-      <footer className="main-footer"><span><span className="live-dot" /> All systems operational</span><span>Â© 2024 GoldenHR <span className="footer-divider">Â·</span> Built for better work.</span></footer>
+      <footer className="main-footer"><span><span className="live-dot" /> All systems operational</span><span>Ã‚Â© 2024 GoldenHR <span className="footer-divider">Ã‚Â·</span> Built for better work.</span></footer>
     </section>
   </main>
 }
