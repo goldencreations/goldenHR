@@ -2,7 +2,27 @@
 
 import { useEffect, useId, useMemo, useState } from 'react'
 import { fetchCurrentUser, login, logout, type AuthUser } from '../lib/api'
-import { HrDataProvider } from '../lib/hr-data'
+import { HrDataProvider, useHrData, EmptyState } from '../lib/hr-data'
+import { notifications as notificationsApi } from '../lib/data'
+
+const noticeKinds: NoticeKind[] = ['payroll', 'money', 'contract', 'role', 'department', 'employee', 'document', 'security', 'leave']
+
+const noticeKindFor = (value: string | null): NoticeKind =>
+  (noticeKinds.find((kind) => kind === value) ?? 'security')
+
+function formatRelative(value: string | null): string {
+  if (!value) return ''
+  const then = new Date(value).getTime()
+  if (Number.isNaN(then)) return ''
+  const minutes = Math.round((Date.now() - then) / 60000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes} minutes ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.round(hours / 24)
+  if (days === 1) return 'Yesterday'
+  return `${days} days ago`
+}
 import {
   Activity,
   ArrowDownRight,
@@ -1342,12 +1362,43 @@ function useNotices() {
   return [notices, setNotices] as const
 }
 
-function NotificationsPage({ isEmployee, notices, setNotices }: { isEmployee: boolean; notices: NoticeItem[]; setNotices: React.Dispatch<React.SetStateAction<NoticeItem[]>> }) {
+function NotificationsPage({ isEmployee }: { isEmployee: boolean }) {
+  const { notifications, unreadCount, reloadOne } = useHrData()
   const [filter, setFilter] = useState<'All' | NoticeKind>('All')
-  const visible = notices.filter((item) => item.audience !== 'HR' || !isEmployee).filter((item) => filter === 'All' || item.kind === filter)
-  const unread = notices.filter((item) => item.audience !== 'HR' || !isEmployee).filter((item) => !item.read).length
+
+  const notices: NoticeItem[] = notifications.items.map((entry) => ({
+    id: String(entry.id),
+    kind: noticeKindFor(entry.kind),
+    title: entry.title ?? '',
+    detail: entry.detail ?? '',
+    actor: 'GoldenHR',
+    time: formatRelative(entry.created_at) ?? '',
+    audience: 'Both',
+    read: entry.read,
+  }))
+
+  const visible = notices.filter((item) => filter === 'All' || item.kind === filter)
+  const unread = unreadCount
   const kinds = Array.from(new Set(visible.map((item) => item.kind)))
-  const markAll = () => setNotices((items) => items.map((item) => ({ ...item, read: true })))
+
+  const markAll = async () => {
+    await notificationsApi.markAllRead()
+    reloadOne('notifications')
+  }
+
+  const markOne = async (id: string) => {
+    await notificationsApi.markRead(id)
+    reloadOne('notifications')
+  }
+
+  const dismissOne = async (id: string) => {
+    await notificationsApi.remove(id)
+    reloadOne('notifications')
+  }
+
+  if (notifications.status === 'loading') return <EmptyState label="Loading notifications" />
+  if (notifications.status === 'error') return <EmptyState label="Could not load notifications" detail={notifications.error ?? undefined} />
+
   return <section className="management-page">
     <div className="workspace-hero"><div><p className="eyebrow">UPDATES</p><h1>Notifications</h1><p>Payroll, money requests, contracts, roles and security events in one feed.</p></div>{unread > 0 && <button className="secondary-button" onClick={markAll}><FileCheck2 /> Mark all as read</button>}</div>
     <div className="count-widget-row count-widget-row-4">
@@ -1362,7 +1413,7 @@ function NotificationsPage({ isEmployee, notices, setNotices }: { isEmployee: bo
         {visible.map((item) => { const Icon = kindMeta[item.kind].icon; return <article className={`notification-row ${item.read ? '' : 'unread'}`} key={item.id}>
           <span className={`notification-icon ${item.kind}`}><Icon /></span>
           <div className="notification-copy"><div className="notification-head"><strong>{item.title}</strong><span className="notification-kind">{kindMeta[item.kind].label}</span>{!item.read && <i className="notification-dot" />}</div><p>{item.detail}</p><span className="notification-meta">{item.actor} · {item.time}</span></div>
-          <div className="employee-actions"><button onClick={() => setNotices((items) => items.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry)))} aria-label={`Mark ${item.title} as read`}><FileCheck2 /></button><button onClick={() => setNotices((items) => items.filter((entry) => entry.id !== item.id))} aria-label={`Dismiss ${item.title}`}><Trash2 /></button></div>
+          <div className="employee-actions"><button onClick={() => markOne(item.id)} aria-label={`Mark ${item.title} as read`}><FileCheck2 /></button><button onClick={() => dismissOne(item.id)} aria-label={`Dismiss ${item.title}`}><Trash2 /></button></div>
         </article> })}
         {visible.length === 0 && <div className="leave-empty"><Bell /><p>No notifications in this category.</p></div>}
       </div>
@@ -2184,7 +2235,7 @@ return (
 <div className={mobileOpen ? 'mobile-nav-open' : ''}><SideNav portal={portal} active={active} onChange={(item) => { setActive(item); setMobileOpen(false) }} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} unread={unread} user={currentUser} /></div>{collapsed && <button className="sidebar-reopen icon-button" onClick={() => setCollapsed(false)} aria-label="Open sidebar" title="Open sidebar"><Menu /></button>}
   <section className="main-area">
       <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumb"><Grid2X2 /> <span>Workspace</span><span>/</span><strong>{pageTitle}</strong></div><div className="topbar-right"><button className="top-icon" aria-label="Search"><Search /></button><button className="top-icon notification-button" onClick={() => setActive('Notifications')} aria-label="Notifications"><Bell />{unread > 0 && <i>{unread}</i>}</button><div className="top-profile"><div className="avatar avatar-sand">{initialsOf(currentUser?.name)}</div><ChevronDown /></div><button className="logout-button" onClick={signOut}><LogOut /> Logout</button></div></header>
-      <div className="page-content">{active === 'Dashboard' ? <Dashboard portal={portal} /> : active === 'Add employee' && portal === 'HR' ? <AddEmployeePage editing={null} onDone={() => setActive('Employee management')} /> : active === 'Employee management' && portal === 'HR' ? <EmployeeManagementPage /> : active === 'Department & role' && portal === 'HR' ? <DepartmentRolesPage /> : active === 'Reports' ? <ReportsPage /> : active === 'Contracts' && portal === 'HR' ? <ContractsPage /> : active === 'Documents' && portal === 'HR' ? <DocumentsPage /> : active === 'Work progress' && portal === 'Employee' ? <WorkProgressPage /> : active === 'Contract' && portal === 'Employee' ? <EmployeeContractPage /> : active === 'Leave approval' && portal === 'HR' ? <LeaveApprovalPage /> : active === 'Leave request' && portal === 'Employee' ? <LeaveRequestPage /> : active === 'Payroll' && portal === 'HR' ? <PayrollCenterPage /> : active === 'Notifications' ? <NotificationsPage isEmployee={portal === 'Employee'} notices={notices} setNotices={setNotices} /> : active === 'Settings' ? <SettingsPage isEmployee={portal === 'Employee'} credentials={credentials} setCredentials={setCredentials} theme={theme} setTheme={setTheme} setNotices={setNotices} /> : active === 'Registration info' && portal === 'Employee' ? <RegistrationInfo person={employeeRecords[0]} mode="self" onBack={() => setActive('Dashboard')} /> : active === 'Payslip' && portal === 'Employee' ? <EmployeePayslipsPage /> : active === 'Money request' ? <MoneyRequestPage isEmployee={portal === 'Employee'} requests={moneyRequests} setRequests={setMoneyRequests} /> : <WorkspacePage portal={portal} page={active} />}</div>
+      <div className="page-content">{active === 'Dashboard' ? <Dashboard portal={portal} /> : active === 'Add employee' && portal === 'HR' ? <AddEmployeePage editing={null} onDone={() => setActive('Employee management')} /> : active === 'Employee management' && portal === 'HR' ? <EmployeeManagementPage /> : active === 'Department & role' && portal === 'HR' ? <DepartmentRolesPage /> : active === 'Reports' ? <ReportsPage /> : active === 'Contracts' && portal === 'HR' ? <ContractsPage /> : active === 'Documents' && portal === 'HR' ? <DocumentsPage /> : active === 'Work progress' && portal === 'Employee' ? <WorkProgressPage /> : active === 'Contract' && portal === 'Employee' ? <EmployeeContractPage /> : active === 'Leave approval' && portal === 'HR' ? <LeaveApprovalPage /> : active === 'Leave request' && portal === 'Employee' ? <LeaveRequestPage /> : active === 'Payroll' && portal === 'HR' ? <PayrollCenterPage /> : active === 'Notifications' ? <NotificationsPage isEmployee={portal === 'Employee'} /> : active === 'Settings' ? <SettingsPage isEmployee={portal === 'Employee'} credentials={credentials} setCredentials={setCredentials} theme={theme} setTheme={setTheme} setNotices={setNotices} /> : active === 'Registration info' && portal === 'Employee' ? <RegistrationInfo person={employeeRecords[0]} mode="self" onBack={() => setActive('Dashboard')} /> : active === 'Payslip' && portal === 'Employee' ? <EmployeePayslipsPage /> : active === 'Money request' ? <MoneyRequestPage isEmployee={portal === 'Employee'} requests={moneyRequests} setRequests={setMoneyRequests} /> : <WorkspacePage portal={portal} page={active} />}</div>
       <footer className="main-footer"><span><span className="live-dot" /> All systems operational</span><span>© 2024 GoldenHR <span className="footer-divider">·</span> Built for better work.</span></footer>
     </section>
   </main>
