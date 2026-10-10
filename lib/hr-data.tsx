@@ -223,6 +223,40 @@ export function HrDataProvider({ user, children }: { user: AuthUser | null; chil
     [run],
   )
 
+  /*
+   * Background refresh.
+   *
+   * reloadOne covers "update instantly after I act", but changes made by
+   * other users would not appear until the page was revisited. This polls the
+   * slices that represent other people's actions.
+   *
+   * Notifications and the dashboard are polled because they are the two views
+   * where a colleague's work matters most, and both are cheap single-row
+   * aggregate queries. The larger collections (employees, payslips, payroll
+   * runs) are deliberately left to reloadOne: polling them would mean
+   * re-sending megabytes of records every interval and refetching lists the
+   * user is not looking at.
+   *
+   * The interval is chosen to stay well inside the login throttle and to keep
+   * idle traffic negligible; this is a freshness floor, not a real-time feed.
+   */
+  useEffect(() => {
+    if (!user) return
+
+    const POLL_MS = 60_000
+    const keys: CollectionKey[] = ['notifications', 'dashboard']
+
+    const timer = setInterval(() => {
+      // A hidden tab polling in the background wastes requests and can flip
+      // the app back to a loading state when the user returns to it.
+      if (document.visibilityState !== 'visible') return
+
+      keys.forEach((key) => { void reloadOne(key) })
+    }, POLL_MS)
+
+    return () => clearInterval(timer)
+  }, [user, reloadOne])
+
   const value = useMemo<HrData>(() => {
     const slice = <T,>(key: string) => slices[key] as Slice<T>
 

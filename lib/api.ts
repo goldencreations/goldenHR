@@ -1,23 +1,59 @@
 /**
  * GoldenHR API client.
  *
- * The API lives on a different origin, so requests are authenticated with a
- * bearer token issued by POST /api/auth/login. The token is held in
- * localStorage: the app is a static export with no server, so there is no
- * httpOnly cookie available.
+ * The API lives on a different origin, so every request must be explicitly
+ * credentialed. Sessions are held in an HttpOnly cookie issued by Sanctum:
+ * page scripts cannot read it, so an XSS bug cannot exfiltrate a session.
  *
- * That choice has a trade-off worth stating plainly. A token in
- * localStorage is readable by any script on the page, so an XSS bug would
- * leak a session. The alternative, an httpOnly cookie, would need the
- * frontend to be served from the API origin. Mitigations here: the token
- * is only ever sent as an Authorization header, never interpolated into
- * markup, and no HTML is ever rendered from API data.
+ * Cookie auth means CSRF applies. The client therefore asks for
+ * /sanctum/csrf-cookie once before signing in, and Laravel reads the
+ * resulting XSRF-TOKEN cookie, which is readable precisely so it can be sent
+ * back as a header. That cookie is the only session-related value JS touches.
+ *
+ * A bearer token is still accepted by the API for non-browser callers.
  */
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') ?? 'https://hr-api.goldencreations.online'
 
-const TOKEN_KEY = 'goldenhr.token'
+/** Readable companion to the HttpOnly session cookie, echoed back as a header. */
+const CSRF_COOKIE = 'XSRF-TOKEN'
+
+let csrfReady: Promise<void> | null = null
+
+/**
+ * Fetch the CSRF cookie once per page load. Safe to call repeatedly: the
+ * in-flight promise is shared so a burst of requests triggers one call.
+ */
+export function ensureCsrfCookie(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve()
+
+  csrfReady ??= fetch(`${API_BASE}/sanctum/csrf-cookie`, {
+    method: 'GET',
+    credentials: 'include',
+  })
+    .then((response) => {
+      // A failed bootstrap must not be cached, or every later request would
+      // reuse a cookie that was never set.
+      if (!response.ok) {
+        csrfReady = null
+        throw new Error(`CSRF bootstrap failed with ${response.status}.`)
+      }
+    })
+    .catch((error) => {
+      csrfReady = null
+      throw error
+    })
+
+  return csrfReady
+}
+
+function readCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null
+
+  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
 
 export type AuthUser = {
   id: number
@@ -54,30 +90,16 @@ export class ApiError extends Error {
   }
 }
 
-export function getToken(): string | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage.getItem(TOKEN_KEY)
-  } catch {
-    // Private browsing or a blocked storage partition.
-    return null
-  }
-}
-
-export function setToken(token: string): void {
-  try {
-    window.localStorage.setItem(TOKEN_KEY, token)
-  } catch {
-    /* session simply will not persist across reloads */
-  }
-}
-
-export function clearToken(): void {
-  try {
-    window.localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* nothing to do */
-  }
+/**
+ * Whether a session cookie is likely present.
+ *
+ * The cookie itself is HttpOnly and cannot be inspected, so this only checks
+ * the readable CSRF companion. It is a hint for deciding whether to attempt
+ * /api/auth/me on load, never an authorisation check: the API is the only
+ * thing that can say whether the session is actually valid.
+ */
+export function hasSessionCookie(): boolean {
+  return readCsrfToken() !== null
 }
 
 type RequestOptions = {
@@ -91,19 +113,35 @@ type RequestOptions = {
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, form, signal } = options
 
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  const token = getToken()
+  return request<T>(path, { method, body, form, signal })
+}
 
-  if (token) headers.Authorization = `Bearer ${token}`
+/** Methods that can change state and therefore need a CSRF token. */
+const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+async function request<T>(path: string, options: RequestOptions, retried = false): Promise<T> {
+  const { method = 'GET', body, form, signal } = options
+
+  const headers: Record<string, string> = { Accept: 'application/json' }
 
   // FormData must set its own multipart boundary, so no Content-Type here.
   if (body !== undefined) headers['Content-Type'] = 'application/json'
+
+  if (UNSAFE.has(method)) {
+    // Obtain the CSRF cookie before the first state-changing call of the
+    // session, then echo it back as the header Laravel checks.
+    await ensureCsrfCookie()
+    const csrf = readCsrfToken()
+
+    if (csrf) headers['X-XSRF-TOKEN'] = csrf
+  }
 
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
+      credentials: 'include',
       body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
       signal,
     })
@@ -126,6 +164,19 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   if (response.status === 204) return undefined as T
 
+  /*
+   * 419 means Laravel rejected the CSRF token: the session cookie and the
+   * XSRF token disagreed, which happens after the session rotates or on a
+   * page restored from cache. Refreshing the CSRF cookie and replaying once
+   * recovers transparently. Retrying more than that would mask a genuine
+   * mismatch as an infinite loop.
+   */
+  if (response.status === 419 && !retried) {
+    csrfReady = null
+    await ensureCsrfCookie()
+    return request<T>(path, options, true)
+  }
+
   const isJson = (response.headers.get('content-type') ?? '').includes('application/json')
   const payload = isJson ? await response.json().catch(() => null) : null
 
@@ -141,17 +192,16 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 }
 
 /**
- * Sign in and store the token. Throws ApiError with the message the backend
- * returns, which is deliberately identical for an unknown address and a
- * wrong password.
+ * Sign in. The session is set by an HttpOnly cookie on the response, so
+ * nothing is stored on the client. Throws ApiError with the backend message,
+ * which is deliberately identical for an unknown address and a wrong
+ * password.
  */
 export async function login(email: string, password: string): Promise<AuthUser> {
-  const data = await apiFetch<{ token: string; user: AuthUser }>('/api/auth/login', {
+  const data = await apiFetch<{ user: AuthUser }>('/api/auth/login', {
     method: 'POST',
     body: { email, password, device_name: 'web' },
   })
-
-  setToken(data.token)
 
   return data.user
 }
@@ -162,16 +212,18 @@ export async function login(email: string, password: string): Promise<AuthUser> 
  * screen instead of failing every later request.
  */
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
-  if (!getToken()) return null
-
   try {
+    // Always asked: only the API can say whether the cookie is still valid,
+    // and a cheap miss just returns null.
     const data = await apiFetch<{ user: AuthUser }>('/api/auth/me')
     return data.user
   } catch (error) {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-      clearToken()
+      // An expired or rejected session must not leave the app signed in.
+      csrfReady = null
       return null
     }
+
     throw error
   }
 }
@@ -180,8 +232,12 @@ export async function logout(): Promise<void> {
   try {
     await apiFetch('/api/auth/logout', { method: 'POST' })
   } catch {
-    // The token is dropped locally regardless, so a network failure here
-    // must not leave the user apparently signed in.
+    /*
+     * The cookie may survive a network failure. Forget the cached CSRF value
+     * regardless so the next sign-in bootstraps a fresh pair rather than
+     * reusing a token from the session that just ended.
+     */
   }
-  clearToken()
+
+  csrfReady = null
 }
