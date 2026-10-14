@@ -158,6 +158,8 @@ export type HrDocument = {
   employee: { id: number; full_name: string } | null
   category: string | null
   category_slug: string | null
+  category_id: number | null
+  contract_id: number | null
   type: string
   mime_type: string | null
   size_bytes: number
@@ -273,6 +275,44 @@ export type Paged<T> = {
   }
 }
 
+export type LeaveTypeRef = {
+  id: number
+  name: string
+  annual_allowance_days: number | null
+  requires_document: boolean
+}
+
+export type MoneyTypeRef = {
+  id: number
+  name: string
+  requires_receipt: boolean
+}
+
+export type DocCategory = {
+  id: number
+  name: string
+  slug: string
+}
+
+export type MeDashboard = {
+  generated_at: string
+  year: number
+  payslips: {
+    count: number
+    latest_net_minor: number
+    year_net_minor: number
+    series: { month: string; net_minor: number }[]
+  }
+  leave: { pending: number; approved_days: number; requests_count: number }
+  money_requests: { requested_minor: number; pending_minor: number; count: number }
+  contract: {
+    reference: string
+    status: string
+    start_date: string | null
+    end_date: string | null
+  } | null
+}
+
 const qs = (params: Record<string, string | number | boolean | undefined | null>): string => {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -290,7 +330,10 @@ export const employees = {
   update: (id: number, body: unknown) =>
     apiFetch<{ message: string; password_reset: boolean; employee: Employee }>(`/api/employees/${id}`, { method: 'PATCH', body }),
   terminate: (id: number) => apiFetch<{ message: string }>(`/api/employees/${id}`, { method: 'DELETE' }),
+  avatar: (id: number, form: FormData) =>
+    apiFetch<{ message: string; url: string }>(`/api/employees/${id}/avatar`, { method: 'POST', form }),
   dashboard: () => apiFetch<Dashboard>('/api/dashboard'),
+  meDashboard: () => apiFetch<MeDashboard>('/api/me/dashboard'),
 }
 
 export const departments = {
@@ -315,6 +358,7 @@ export const departments = {
     apiFetch<unknown>(`/api/departments/${id}/roles/${roleId}`, { method: 'PATCH', body }),
   deleteRole: (id: number, roleId: number) =>
     apiFetch<unknown>(`/api/departments/${id}/roles/${roleId}`, { method: 'DELETE' }),
+  remove: (id: number) => apiFetch<{ message: string }>(`/api/departments/${id}`, { method: 'DELETE' }),
 }
 
 export const leave = {
@@ -327,6 +371,9 @@ export const leave = {
     apiFetch<unknown>(`/api/leave-requests/${id}/decline`, { method: 'POST', body: { note } }),
   withdraw: (id: number) => apiFetch<unknown>(`/api/leave-requests/${id}`, { method: 'DELETE' }),
   balances: () => apiFetch<{ year: number; balances: LeaveBalance[] }>('/api/me/leave-balances'),
+  balancesFor: (employeeId?: number, year?: number) =>
+    apiFetch<{ year: number; balances: LeaveBalance[] }>(`/api/leave-balances${qs({ employee_id: employeeId, year })}`),
+  types: () => apiFetch<{ data: LeaveTypeRef[] }>('/api/leave-types'),
 }
 
 export const payroll = {
@@ -358,7 +405,7 @@ export const money = {
   decline: (id: number, note?: string) =>
     apiFetch<unknown>(`/api/money-requests/${id}/decline`, { method: 'POST', body: { note } }),
   markPaid: (id: number) => apiFetch<unknown>(`/api/money-requests/${id}/mark-paid`, { method: 'POST' }),
-  types: () => apiFetch<unknown>('/api/contract-types'),
+  types: () => apiFetch<{ data: MoneyTypeRef[] }>('/api/money-request-types'),
 }
 
 export const documents = {
@@ -368,6 +415,7 @@ export const documents = {
   replace: (id: number, form: FormData) =>
     apiFetch<{ message: string; document: HrDocument }>(`/api/documents/${id}/replace`, { method: 'POST', form }),
   remove: (id: number) => apiFetch<{ message: string }>(`/api/documents/${id}`, { method: 'DELETE' }),
+  categories: () => apiFetch<{ data: DocCategory[] }>('/api/document-categories'),
 }
 
 export const notifications = {

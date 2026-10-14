@@ -1,58 +1,44 @@
 /**
  * GoldenHR API client.
  *
- * The API lives on a different origin, so every request must be explicitly
- * credentialed. Sessions are held in an HttpOnly cookie issued by Sanctum:
- * page scripts cannot read it, so an XSS bug cannot exfiltrate a session.
+ * Token authentication, deliberately cookie-free: the session is a bearer
+ * token issued by POST /api/auth/login, kept in localStorage and sent as
+ * an Authorization header. Nothing here depends on the browser accepting
+ * cookies, so locked-down browsers, blockers and http pages all sign in
+ * the same way.
  *
- * Cookie auth means CSRF applies. The client therefore asks for
- * /sanctum/csrf-cookie once before signing in, and Laravel reads the
- * resulting XSRF-TOKEN cookie, which is readable precisely so it can be sent
- * back as a header. That cookie is the only session-related value JS touches.
- *
- * A bearer token is still accepted by the API for non-browser callers.
+ * The trade-off is stated plainly: a token in localStorage is readable by
+ * page scripts, so an XSS bug could leak a session. Mitigations are that
+ * the token is only ever sent as a header (never rendered), the API
+ * enforces an explicit CORS origin allowlist, and signing out revokes the
+ * token server-side.
  */
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') ?? 'https://hr-api.goldencreations.online'
 
-/** Readable companion to the HttpOnly session cookie, echoed back as a header. */
-const CSRF_COOKIE = 'XSRF-TOKEN'
+const TOKEN_KEY = 'goldenhr.token'
 
-let csrfReady: Promise<void> | null = null
+function readToken(): string | null {
+  if (typeof window === 'undefined') return null
 
-/**
- * Fetch the CSRF cookie once per page load. Safe to call repeatedly: the
- * in-flight promise is shared so a burst of requests triggers one call.
- */
-export function ensureCsrfCookie(): Promise<void> {
-  if (typeof window === 'undefined') return Promise.resolve()
-
-  csrfReady ??= fetch(`${API_BASE}/sanctum/csrf-cookie`, {
-    method: 'GET',
-    credentials: 'include',
-  })
-    .then((response) => {
-      // A failed bootstrap must not be cached, or every later request would
-      // reuse a cookie that was never set.
-      if (!response.ok) {
-        csrfReady = null
-        throw new Error(`CSRF bootstrap failed with ${response.status}.`)
-      }
-    })
-    .catch((error) => {
-      csrfReady = null
-      throw error
-    })
-
-  return csrfReady
+  try {
+    return window.localStorage.getItem(TOKEN_KEY)
+  } catch {
+    // Private mode without storage: the session simply lasts until reload.
+    return null
+  }
 }
 
-function readCsrfToken(): string | null {
-  if (typeof document === 'undefined') return null
+function writeToken(token: string | null): void {
+  if (typeof window === 'undefined') return
 
-  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`))
-  return match ? decodeURIComponent(match[1]) : null
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token)
+    else window.localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* storage unavailable; the in-memory session still works until reload */
+  }
 }
 
 export type AuthUser = {
@@ -90,18 +76,6 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * Whether a session cookie is likely present.
- *
- * The cookie itself is HttpOnly and cannot be inspected, so this only checks
- * the readable CSRF companion. It is a hint for deciding whether to attempt
- * /api/auth/me on load, never an authorisation check: the API is the only
- * thing that can say whether the session is actually valid.
- */
-export function hasSessionCookie(): boolean {
-  return readCsrfToken() !== null
-}
-
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   body?: unknown
@@ -116,10 +90,61 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return request<T>(path, { method, body, form, signal })
 }
 
-/** Methods that can change state and therefore need a CSRF token. */
-const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+/*
+ * GET response cache with stale scoping per endpoint.
+ *
+ * Lists and aggregates barely change second to second, but every portal
+ * click used to refetch them. Reads now share in-flight requests (a burst
+ * of mounts triggers one call) and reuse fresh responses for a short TTL.
+ * Mutations bypass through invalidateCache, called by the data provider
+ * after every write, so a decision is always followed by a live reload
+ * while untouched collections stay instant.
+ */
 
-async function request<T>(path: string, options: RequestOptions, retried = false): Promise<T> {
+type CacheEntry = { at: number; data: unknown }
+
+const responseCache = new Map<string, CacheEntry>()
+const inflight = new Map<string, Promise<unknown>>()
+
+const CACHE_TTLS: [string, number][] = [
+  ['/api/contract-types', 300_000],
+  ['/api/leave-types', 300_000],
+  ['/api/money-request-types', 300_000],
+  ['/api/document-categories', 300_000],
+  ['/api/dashboard', 30_000],
+  ['/api/me/dashboard', 30_000],
+  ['/api/reports/monthly', 45_000],
+  ['/api/notifications', 15_000],
+]
+
+const DEFAULT_TTL = 20_000
+
+function cacheTtl(path: string): number {
+  for (const [prefix, ttl] of CACHE_TTLS) {
+    if (path.startsWith(prefix)) return ttl
+  }
+
+  return DEFAULT_TTL
+}
+
+/** Drop cached GETs, either everything or one endpoint family. */
+export function invalidateCache(prefix?: string): void {
+  if (!prefix) {
+    responseCache.clear()
+    return
+  }
+
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(`GET ${prefix}`)) responseCache.delete(key)
+  }
+}
+
+/** Prefetch a GET into the cache without waiting for it. */
+export function prefetch(path: string): void {
+  void apiFetch(path).catch(() => {})
+}
+
+async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const { method = 'GET', body, form, signal } = options
 
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -127,81 +152,94 @@ async function request<T>(path: string, options: RequestOptions, retried = false
   // FormData must set its own multipart boundary, so no Content-Type here.
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
-  if (UNSAFE.has(method)) {
-    // Obtain the CSRF cookie before the first state-changing call of the
-    // session, then echo it back as the header Laravel checks.
-    await ensureCsrfCookie()
-    const csrf = readCsrfToken()
+  const token = readToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
 
-    if (csrf) headers['X-XSRF-TOKEN'] = csrf
+  // Cacheable reads share one in-flight request and reuse fresh responses.
+  // Anything else (writes, uploads, aborted calls) always hits the wire.
+  const cacheable = method === 'GET' && !signal && form === undefined
+  const cacheKey = `${method} ${path}`
+
+  if (cacheable) {
+    const hit = responseCache.get(cacheKey)
+
+    if (hit && Date.now() - hit.at < cacheTtl(path)) return hit.data as T
+
+    const running = inflight.get(cacheKey)
+    if (running) return running as Promise<T>
   }
 
-  let response: Response
+  const task = (async (): Promise<T> => {
+    let response: Response
+    try {
+      response = await fetch(`${API_BASE}${path}`, {
+        method,
+        headers,
+        credentials: 'include',
+        body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
+        signal,
+      })
+    } catch (cause) {
+      if ((cause as Error)?.name === 'AbortError') throw cause
+
+      /*
+       * A blocked cross-origin request fails here as an opaque TypeError, and
+       * the console shows a CORS error rather than anything this catch can
+       * inspect. Reporting it as a plain network failure sends people looking
+       * at their connection, so the message names the likely cause.
+       */
+      throw new ApiError(
+        'Could not reach the GoldenHR service. If you are running the app locally, ' +
+          'check that this origin is listed in the API CORS_ALLOWED_ORIGINS setting — ' +
+          'the browser reports that as a connection failure.',
+        0,
+      )
+    }
+
+    if (response.status === 204) return undefined as T
+
+    const isJson = (response.headers.get('content-type') ?? '').includes('application/json')
+    const payload = isJson ? await response.json().catch(() => null) : null
+
+    if (!response.ok) {
+      const message =
+        (payload as { message?: string } | null)?.message ??
+        `Request failed (${response.status}).`
+
+      throw new ApiError(message, response.status, (payload as { errors?: Record<string, string[]> })?.errors ?? {})
+    }
+
+    return payload as T
+  })()
+
+  if (!cacheable) return task
+
+  inflight.set(cacheKey, task)
+
   try {
-    response = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers,
-      credentials: 'include',
-      body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
-      signal,
-    })
-  } catch (cause) {
-    if ((cause as Error)?.name === 'AbortError') throw cause
-
-    /*
-     * A blocked cross-origin request fails here as an opaque TypeError, and
-     * the console shows a CORS error rather than anything this catch can
-     * inspect. Reporting it as a plain network failure sends people looking
-     * at their connection, so the message names the likely cause.
-     */
-    throw new ApiError(
-      'Could not reach the GoldenHR service. If you are running the app locally, ' +
-        'check that this origin is listed in the API CORS_ALLOWED_ORIGINS setting — ' +
-        'the browser reports that as a connection failure.',
-      0,
-    )
+    const data = await task
+    responseCache.set(cacheKey, { at: Date.now(), data })
+    return data
+  } finally {
+    inflight.delete(cacheKey)
   }
-
-  if (response.status === 204) return undefined as T
-
-  /*
-   * 419 means Laravel rejected the CSRF token: the session cookie and the
-   * XSRF token disagreed, which happens after the session rotates or on a
-   * page restored from cache. Refreshing the CSRF cookie and replaying once
-   * recovers transparently. Retrying more than that would mask a genuine
-   * mismatch as an infinite loop.
-   */
-  if (response.status === 419 && !retried) {
-    csrfReady = null
-    await ensureCsrfCookie()
-    return request<T>(path, options, true)
-  }
-
-  const isJson = (response.headers.get('content-type') ?? '').includes('application/json')
-  const payload = isJson ? await response.json().catch(() => null) : null
-
-  if (!response.ok) {
-    const message =
-      (payload as { message?: string } | null)?.message ??
-      `Request failed (${response.status}).`
-
-    throw new ApiError(message, response.status, (payload as { errors?: Record<string, string[]> })?.errors ?? {})
-  }
-
-  return payload as T
 }
 
 /**
- * Sign in. The session is set by an HttpOnly cookie on the response, so
- * nothing is stored on the client. Throws ApiError with the backend message,
- * which is deliberately identical for an unknown address and a wrong
- * password.
+ * Sign in with the database account. The backend checks the email and
+ * password against goldenhr_db.users and returns a bearer token plus the
+ * user record; the portal (HR vs Employee) is decided from the returned
+ * role, never from anything stored locally. Throws ApiError with the
+ * backend message, which is deliberately identical for an unknown address
+ * and a wrong password.
  */
 export async function login(email: string, password: string): Promise<AuthUser> {
-  const data = await apiFetch<{ user: AuthUser }>('/api/auth/login', {
+  const data = await apiFetch<{ token: string; user: AuthUser }>('/api/auth/login', {
     method: 'POST',
     body: { email, password, device_name: 'web' },
   })
+
+  writeToken(data.token)
 
   return data.user
 }
@@ -212,15 +250,15 @@ export async function login(email: string, password: string): Promise<AuthUser> 
  * screen instead of failing every later request.
  */
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
+  if (!readToken()) return null
+
   try {
-    // Always asked: only the API can say whether the cookie is still valid,
-    // and a cheap miss just returns null.
     const data = await apiFetch<{ user: AuthUser }>('/api/auth/me')
     return data.user
   } catch (error) {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-      // An expired or rejected session must not leave the app signed in.
-      csrfReady = null
+      // A revoked or expired token must not leave the app signed in.
+      writeToken(null)
       return null
     }
 
@@ -230,14 +268,46 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
 
 export async function logout(): Promise<void> {
   try {
-    await apiFetch('/api/auth/logout', { method: 'POST' })
+    if (readToken()) await apiFetch('/api/auth/logout', { method: 'POST' })
   } catch {
-    /*
-     * The cookie may survive a network failure. Forget the cached CSRF value
-     * regardless so the next sign-in bootstraps a fresh pair rather than
-     * reusing a token from the session that just ended.
-     */
+    /* the token is forgotten below regardless */
   }
 
-  csrfReady = null
+  writeToken(null)
+}
+
+/**
+ * Download a file the API guards per user (payslip/contract/receipt PDFs,
+ * stored documents). Plain links cannot carry the bearer token, so the
+ * file is fetched with it and saved from a blob URL instead. Accepts an
+ * API path or a full URL. Throws ApiError on failure.
+ */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const url = /^https?:\/\//i.test(path) ? path : `${API_BASE}${path}`
+  const token = readToken()
+
+  const headers: Record<string, string> = { Accept: '*/*' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const response = await fetch(url, { headers, credentials: 'include' })
+
+  if (!response.ok) {
+    const payload = await response
+      .json()
+      .catch(() => null)
+    const message =
+      (payload as { message?: string } | null)?.message ??
+      `Download failed (${response.status}).`
+    throw new ApiError(message, response.status)
+  }
+
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 5000)
 }
