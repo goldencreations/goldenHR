@@ -27,6 +27,7 @@ export type Employee = {
   hire_date: string | null
   start_date: string | null
   has_login: boolean
+  last_login_at?: string | null
   avatar_url: string | null
   initials: string
   date_of_birth?: string | null
@@ -38,6 +39,11 @@ export type Employee = {
   base_salary_minor?: number
   currency?: string
   documents_count?: number
+  bank_account?: {
+    bank_name: string | null
+    account_name: string | null
+    account_number: string | null
+  } | null
 }
 
 export type JobRole = { id: number; title: string; level: string }
@@ -218,7 +224,7 @@ export type MonthlyReport = {
   year: number
   rows: {
     month: string
-    month_index: number
+    month_index: number // 0-based: 0 = January, 11 = December
     payroll_net: number
     payroll_gross: number
     money_requested: number
@@ -382,6 +388,7 @@ export const payroll = {
   createRun: (body: unknown) => apiFetch<{ message: string; run: PayrollRun }>('/api/payroll/runs', { method: 'POST', body }),
   approve: (id: number) => apiFetch<unknown>(`/api/payroll/runs/${id}/approve`, { method: 'POST' }),
   pay: (id: number) => apiFetch<unknown>(`/api/payroll/runs/${id}/pay`, { method: 'POST' }),
+  remove: (id: number) => apiFetch<{ message: string }>(`/api/payroll/runs/${id}`, { method: 'DELETE' }),
   payslips: (params: Record<string, string | number | undefined> = {}) =>
     apiFetch<Paged<Payslip>>(`/api/payslips${qs({ per_page: 100, ...params })}`),
 }
@@ -390,6 +397,9 @@ export const contracts = {
   list: (params: Record<string, string | number | undefined> = {}) =>
     apiFetch<Paged<Contract>>(`/api/contracts${qs({ status: 'all', per_page: 100, ...params })}`),
   create: (body: unknown) => apiFetch<{ message: string; contract: Contract }>('/api/contracts', { method: 'POST', body }),
+  update: (id: number, body: unknown) =>
+    apiFetch<{ message: string; contract: Contract }>(`/api/contracts/${id}`, { method: 'PATCH', body }),
+  remove: (id: number) => apiFetch<{ message: string }>(`/api/contracts/${id}`, { method: 'DELETE' }),
   send: (id: number) => apiFetch<unknown>(`/api/contracts/${id}/send-for-signature`, { method: 'POST' }),
   respond: (id: number, decision: 'accepted' | 'declined') =>
     apiFetch<unknown>(`/api/contracts/${id}/respond`, { method: 'POST', body: { decision } }),
@@ -405,6 +415,7 @@ export const money = {
   decline: (id: number, note?: string) =>
     apiFetch<unknown>(`/api/money-requests/${id}/decline`, { method: 'POST', body: { note } }),
   markPaid: (id: number) => apiFetch<unknown>(`/api/money-requests/${id}/mark-paid`, { method: 'POST' }),
+  remove: (id: number) => apiFetch<{ message: string }>(`/api/money-requests/${id}`, { method: 'DELETE' }),
   types: () => apiFetch<{ data: MoneyTypeRef[] }>('/api/money-request-types'),
 }
 

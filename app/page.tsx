@@ -227,6 +227,11 @@ const EMPLOYMENT_TYPES = [
   { value: 'part_time', label: 'Part-time' },
 ] as const
 
+const TANZANIAN_BANKS = [
+  'CRDB', 'NMB', 'NBC', 'Stanbic', 'Absa', 'Exim', 'KCB', 'Equity',
+  'DTB', 'Azania', 'TCB', 'PBZ', 'Amana', 'UBA', 'Ecobank',
+] as const
+
 const ROLE_LEVELS = ['lead', 'senior', 'mid', 'junior', 'intern'] as const
 
 function roleLevelLabel(level?: string | null): string {
@@ -321,14 +326,24 @@ function EmployeeForm({ employee, departments, saving, serverError, onSubmit, on
     address: employee?.address ?? '',
     emergencyName: employee?.emergency_contact_name ?? '',
     emergencyPhone: employee?.emergency_contact_phone ?? '',
+    bankName: employee?.bank_account?.bank_name ?? 'CRDB',
+    accountName: employee?.bank_account?.account_name ?? employee?.name ?? '',
+    accountNumber: employee?.bank_account?.account_number ?? '',
   }))
+  // The payment name starts as the employee's name; once HR types their own
+  // value it stops following the name field.
+  const [accountNameTouched, setAccountNameTouched] = useState(() => (employee?.bank_account?.account_name ?? '') !== '')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [passwordError, setPasswordError] = useState('')
   const [avatar, setAvatar] = useState<File | null>(null)
   const [attachment, setAttachment] = useState<File | null>(null)
-  const set = (patch: Partial<typeof values>) => setValues((current) => ({ ...current, ...patch }))
+  const set = (patch: Partial<typeof values>) => setValues((current) => {
+    const next = { ...current, ...patch }
+    if ('name' in patch && !accountNameTouched) next.accountName = patch.name ?? ''
+    return next
+  })
   const roles = useMemo(() => {
     if (!values.departmentId) return departments.flatMap((department) => department.roles)
     return departments.find((department) => String(department.id) === values.departmentId)?.roles ?? []
@@ -363,6 +378,9 @@ function EmployeeForm({ employee, departments, saving, serverError, onSubmit, on
       job_role_id: values.roleId ? Number(values.roleId) : null,
       start_date: values.start || null,
       hire_date: values.hire || null,
+      bank_name: values.bankName.trim() || null,
+      account_name: values.accountName.trim() || null,
+      account_number: values.accountNumber.trim() || null,
     }
     if (password) {
       body.password = password
@@ -393,6 +411,15 @@ function EmployeeForm({ employee, departments, saving, serverError, onSubmit, on
         <Field label="Emergency contact phone"><input type="tel" value={values.emergencyPhone} onChange={(event) => set({ emergencyPhone: event.target.value })} placeholder="Contact phone number" /></Field>
         <Field label="Profile image"><label className="upload-box"><Upload /><span>{avatar ? avatar.name : editing ? 'Replace employee image' : 'Upload employee image'}</span><input type="file" accept="image/*" onChange={(event) => setAvatar(event.target.files?.[0] ?? null)} /></label></Field>
         <Field label="Employee document" full><label className="upload-box"><FileUp /><span>{attachment ? attachment.name : 'Upload CV, contract, ID, or supporting document'}</span><input type="file" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} /></label></Field>
+      </div>
+      <div className="account-panel">
+        <div className="panel-heading"><div><p className="eyebrow">SALARY PAYMENT</p><h3 className="attachment-title">Payment details</h3></div><WalletCards className="sparkle" /></div>
+        <p className="settings-hint">The bank account salary is paid to. Leave empty for employees paid another way — it can be added later with Edit.</p>
+        <div className="form-grid">
+          <Field label="Bank"><input value={values.bankName} onChange={(event) => set({ bankName: event.target.value })} placeholder="e.g. CRDB" list="tz-banks" /><datalist id="tz-banks">{TANZANIAN_BANKS.map((bank) => <option key={bank} value={bank} />)}</datalist></Field>
+          <Field label="Payment name"><input value={values.accountName} onChange={(event) => { setAccountNameTouched(true); set({ accountName: event.target.value }) }} placeholder="Name appearing on the account" /></Field>
+          <Field label="Account number" full><input value={values.accountNumber} onChange={(event) => set({ accountNumber: event.target.value })} placeholder="e.g. 0150000000000" inputMode="numeric" /></Field>
+        </div>
       </div>
       <div className="account-panel">
         <div className="panel-heading"><div><p className="eyebrow">SYSTEM ACCESS</p><h3 className="attachment-title">{editing ? 'Reset portal password' : 'Create their login'}</h3></div><ShieldCheck className="sparkle" /></div>
@@ -856,6 +883,26 @@ function LeaveApprovalPage() {
     }
   }
 
+  const remove = async (request: ApiLeaveRequest) => {
+    if (!window.confirm(`Delete leave request ${request.reference ?? ''} for ${request.employee?.name ?? 'this employee'}? This cannot be undone.`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await leaveApi.withdraw(request.id)
+      setNotice('Leave request deleted')
+      await reloadOne('leaveRequests')
+      await reloadOne('notifications')
+      if (openId === request.id) {
+        setOpenId(null)
+        setNote('')
+      }
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (leaveRequests.status === 'loading') return <EmptyState label="Loading leave requests" />
   if (leaveRequests.status === 'error') return <EmptyState label="Could not load leave requests" detail={leaveRequests.error ?? undefined} />
 
@@ -876,7 +923,7 @@ function LeaveApprovalPage() {
         {visible.map((request) => <article className="leave-row" key={request.id}>
           <div className={`avatar ${toneFor(request.employee?.id ?? request.id)}`}>{request.employee?.initials ?? initialsFor(request.employee?.name)}</div>
           <div className="leave-row-main"><div className="leave-row-head"><strong>{request.employee?.name ?? 'Unknown employee'}</strong><span className="status-pill">{request.leave_type ?? 'Leave'}</span></div><p className="leave-row-dates">{formatDate(request.start_date)} — {formatDate(request.end_date)} <i>·</i> {request.days} working days</p><p className="leave-row-meta">Coverage: {request.coverage?.name ?? '—'} <i>·</i> Approver: {request.approver ?? '—'}{request.created_at ? <> <i>·</i> Submitted {formatRelative(request.created_at)}</> : null}</p><p className="leave-row-reason">{request.reason}</p></div>
-          <div className="leave-row-actions">{statusOf(request.status) === 'pending' ? <><button className="secondary-button" disabled={busy} onClick={() => void decide(request, 'decline')}>Decline</button><button className="primary-button" disabled={busy} onClick={() => void decide(request, 'approve')}><FileCheck2 /> Approve</button></> : <span className={`status-pill ${statusOf(request.status) === 'approved' ? 'ok' : 'off'}`}>{request.status}</span>}<button className="more-button" onClick={() => void openDetail(request)}><Eye /> Review</button></div>
+          <div className="leave-row-actions">{statusOf(request.status) === 'pending' ? <><button className="secondary-button" disabled={busy} onClick={() => void decide(request, 'decline')}>Decline</button><button className="primary-button" disabled={busy} onClick={() => void decide(request, 'approve')}><FileCheck2 /> Approve</button></> : <span className={`status-pill ${statusOf(request.status) === 'approved' ? 'ok' : 'off'}`}>{request.status}</span>}<button className="more-button" onClick={() => void openDetail(request)}><Eye /> Review</button><button className="ghost-icon" disabled={busy} onClick={() => void remove(request)} aria-label={`Delete leave request for ${request.employee?.name ?? request.id}`}><Trash2 /></button></div>
         </article>)}
         {visible.length === 0 && <div className="leave-empty"><ClipboardCheck /><p>No {filter === 'All' ? '' : filter + ' '}requests right now.</p></div>}
       </div>
@@ -903,7 +950,7 @@ function LeaveApprovalPage() {
     ]}
     asideLabel="BALANCE"
     aside={(() => { const balance = balanceFor(open.leave_type_id); return balance ? [{ label: 'Entitled', value: `${balance.entitled_days} days` }, { label: 'Used', value: `${balance.used_days} days` }, { label: 'Booked', value: `${balance.booked_days} days` }, { label: 'Remaining', value: `${balance.remaining_days} days` }] : [] })()}
-    footer={statusOf(open.status) === 'pending' ? <><button className="secondary-button" disabled={busy} onClick={() => void decide(open, 'decline')}><X /> Decline</button><button className="primary-button" disabled={busy} onClick={() => void decide(open, 'approve')}><FileCheck2 /> Approve request</button></> : undefined}
+    footer={statusOf(open.status) === 'pending' ? <><button className="secondary-button" disabled={busy} onClick={() => void decide(open, 'decline')}><X /> Decline</button><button className="primary-button" disabled={busy} onClick={() => void decide(open, 'approve')}><FileCheck2 /> Approve request</button><button className="secondary-button" disabled={busy} onClick={() => void remove(open)}><Trash2 /> Delete</button></> : <><button className="secondary-button" disabled={busy} onClick={() => void remove(open)}><Trash2 /> Delete request</button></>}
     onClose={() => { setOpenId(null); setNote('') }}
   >
     <div className="profile-note"><FileText /><div><strong>Reason given</strong><p>{open.reason || 'No reason given.'}</p></div></div>
@@ -1206,6 +1253,8 @@ function PayrollCenterPage() {
   const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [deleting, setDeleting] = useState<PayrollRun | null>(null)
+  const [confirmText, setConfirmText] = useState('')
 
   const openRun = async (run: PayrollRun) => {
     setOpenId(run.id)
@@ -1230,6 +1279,25 @@ function PayrollCenterPage() {
       await reloadOne('payrollRuns')
       await reloadOne('notifications')
       await openRun({ ...run, status: action === 'approve' ? 'approved' : 'paid' })
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeRun = async () => {
+    if (!deleting) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await payrollApi.remove(deleting.id)
+      setNotice(result.message)
+      setDeleting(null)
+      setConfirmText('')
+      if (openId !== null) { setOpenId(null); setDetail(null) }
+      await reloadOne('payrollRuns')
+      await reloadOne('notifications')
     } catch (cause) {
       setError(apiMessage(cause))
     } finally {
@@ -1302,11 +1370,16 @@ function PayrollCenterPage() {
           <span className="payroll-net-cell">{money(run.net_total_minor)}</span>
           <span className={`status-pill ${run.status === 'paid' || run.status === 'approved' ? 'ok' : ''}`}>{run.status}</span>
           <span>{run.paid_at ? formatDate(run.paid_at) : '—'}</span>
-          <span className="employee-actions"><button onClick={() => void openRun(run)} aria-label={`View ${run.period}`}><Eye /></button><button onClick={() => void downloadFile(`/api/payroll/runs/${run.id}/pdf`, `${run.period}.pdf`).catch((cause) => setError(apiMessage(cause)))} aria-label={`Download ${run.period} report`}><Download /></button></span>
+          <span className="employee-actions"><button onClick={() => void openRun(run)} aria-label={`View ${run.period}`}><Eye /></button><button onClick={() => void downloadFile(`/api/payroll/runs/${run.id}/pdf`, `${run.period}.pdf`).catch((cause) => setError(apiMessage(cause)))} aria-label={`Download ${run.period} report`}><Download /></button><button onClick={() => { setDeleting(run); setConfirmText('') }} aria-label={`Delete ${run.period}`}><Trash2 /></button></span>
         </div>)}
         {runs.length === 0 && <div className="leave-empty"><WalletCards /><p>No pay runs yet. Create the first run above.</p></div>}
       </div>
     </div>
+    {deleting && <AppModal eyebrow="Payroll register" title={`Delete ${formatMonth(deleting.period)}?`} meta={`${deleting.payslip_count} payslips · ${money(deleting.net_total_minor)} net · ${deleting.status}`} icon={Trash2} footer={<><button className="secondary-button" onClick={() => setDeleting(null)}>Cancel</button><button className="primary-button" disabled={busy || confirmText.trim() !== deleting.period} onClick={() => void removeRun()}><Trash2 /> {busy ? 'Deleting…' : 'Delete run'}</button></>} onClose={() => setDeleting(null)}>
+      <p className="settings-hint">This erases the run and its {deleting.payslip_count} payslips, including paid history. Type <strong>{deleting.period}</strong> below to confirm.</p>
+      <div className="detail-field full"><small>Type {deleting.period} to confirm</small><input value={confirmText} onChange={(event) => setConfirmText(event.target.value)} placeholder={deleting.period} autoComplete="off" /></div>
+      {error && <div className="password-error"><X /> {error}</div>}
+    </AppModal>}
   </section>
 }
 
@@ -1430,10 +1503,20 @@ function ContractsPage() {
   const { contracts, employees, reloadOne } = useHrData()
   const [drafts, setDrafts] = useState<ContractDraft[]>([newDraft(0)])
   const [saved, setSaved] = useState(false)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [openId, setOpenId] = useState<number | null>(null)
   const [types, setTypes] = useState<{ id: number; name: string }[]>([])
+  const [editing, setEditing] = useState<Contract | null>(null)
+  const [editSalary, setEditSalary] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editTermination, setEditTermination] = useState('')
+  const [editStatus, setEditStatus] = useState('')
+  const [deleting, setDeleting] = useState<Contract | null>(null)
+  const [confirmText, setConfirmText] = useState('')
+  const [filter, setFilter] = useState<'All' | 'active' | 'pending_signature' | 'draft' | 'renewal_due' | 'expired' | 'terminated'>('All')
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     contractsApi.types()
@@ -1445,7 +1528,60 @@ function ContractsPage() {
   }, [])
 
   const open = contracts.items.find((item) => item.id === openId) ?? null
-  if (open) return <ContractDetailPage contract={open} onBack={() => { setOpenId(null); void reloadOne('contracts') }} />
+
+  const startEdit = (contract: Contract) => {
+    setOpenId(null)
+    setEditing(contract)
+    setEditSalary(String(contract.base_salary_minor))
+    setEditDescription(contract.description ?? '')
+    setEditTermination(contract.termination_terms ?? '')
+    setEditStatus(contract.status)
+    setError(null)
+  }
+
+  const saveEdit = async () => {
+    if (!editing) return
+    setBusy(true)
+    setError(null)
+    try {
+      await contractsApi.update(editing.id, {
+        base_salary_minor: Number(editSalary || 0),
+        description: editDescription.trim() || null,
+        termination_terms: editTermination.trim() || null,
+        status: editStatus,
+      })
+      setEditing(null)
+      setNotice('Contract updated')
+      await reloadOne('contracts')
+      await reloadOne('notifications')
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeContract = async () => {
+    if (!deleting) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await contractsApi.remove(deleting.id)
+      setNotice(result.message)
+      setDeleting(null)
+      setConfirmText('')
+      setOpenId(null)
+      await reloadOne('contracts')
+      await reloadOne('documents')
+      await reloadOne('notifications')
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (open) return <ContractDetailPage contract={open} onBack={() => { setOpenId(null); void reloadOne('contracts') }} onEdit={() => startEdit(open)} onDelete={() => { setOpenId(null); setDeleting(open); setConfirmText('') }} />
 
   const update = (id: string, patch: Partial<ContractDraft>) => setDrafts((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)))
 
@@ -1493,6 +1629,34 @@ function ContractsPage() {
   if (employees.status === 'loading') return <EmptyState label="Loading employees" />
 
   const items = contracts.items
+  const statusTone = (status: string) =>
+    status === 'active' ? 'ok' : status === 'pending_signature' || status === 'renewal_due' ? 'warn' : status === 'expired' || status === 'terminated' ? 'off' : ''
+  const statusLabel = (status: string) => status.replace(/_/g, ' ')
+  const termLabel = (contract: Contract) => {
+    if (contract.open_ended) return 'Open ended'
+    if (contract.days_left !== null && contract.days_left !== undefined) {
+      if (contract.days_left < 0) return 'Expired'
+      if (contract.days_left === 0) return 'Ends today'
+      return `${contract.days_left} days left`
+    }
+    return contract.end_date ? formatDate(contract.end_date) : '—'
+  }
+  const counts: Record<string, number> = {
+    active: items.filter((item) => item.status === 'active').length,
+    pending_signature: items.filter((item) => item.status === 'pending_signature').length,
+    draft: items.filter((item) => item.status === 'draft').length,
+    renewal_due: items.filter((item) => item.status === 'renewal_due').length,
+    expired: items.filter((item) => item.status === 'expired').length,
+    terminated: items.filter((item) => item.status === 'terminated').length,
+  }
+  const q = query.trim().toLowerCase()
+  const visible = items
+    .filter((item) => filter === 'All' || item.status === filter)
+    .filter((item) => {
+      if (!q) return true
+      return [item.employee?.name ?? '', item.reference ?? '', item.kind ?? '', item.status ?? '']
+        .join(' ').toLowerCase().includes(q)
+    })
   return <section className="management-page contract-page">
     <div className="workspace-hero"><div><p className="eyebrow">PEOPLE DOCUMENTS</p><h1>Contracts</h1><p>Draft agreements, control renewal dates, and keep every signed document on file.</p></div><button className="primary-button" onClick={() => setDrafts((items) => [...items, newDraft(items.length)])}><Plus /> Add contract</button></div>
 
@@ -1540,16 +1704,58 @@ function ContractsPage() {
     })}
 
     {saved && <div className="panel contract-saved"><Sparkles /><div><strong>Contract saved and sent for signature</strong><p>The employee has been notified and can accept or decline from their portal.</p></div></div>}
+    {notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong></div></div>}
 
     <div className="panel">
-      <div className="panel-heading"><div><p className="eyebrow">{items.length} ON RECORD</p><h2>All contracts</h2></div></div>
-      <div className="profile-table"><div className="profile-table-row profile-table-head"><span>Reference</span><span>Employee</span><span>Period</span><span>Salary</span><span>Status</span><span /></div>{items.map((contract) => <div className="profile-table-row" key={contract.id}><strong>{contract.reference}</strong><span>{contract.employee?.name ?? '—'}</span><span>{formatDate(contract.start_date)} — {contract.open_ended ? 'Open ended' : formatDate(contract.end_date)}</span><span>{money(contract.base_salary_minor)}</span><span className="status-pill">{contract.status}</span><button className="ghost-icon" onClick={() => setOpenId(contract.id)} aria-label={`View ${contract.reference}`}><Eye /></button></div>)}
-        {items.length === 0 && <div className="leave-empty"><FileCheck2 /><p>No contracts on record yet.</p></div>}</div>
+      <div className="panel-heading"><div><p className="eyebrow">{visible.length} SHOWN</p><h2>All contracts</h2></div><div className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search employee, reference, type" /></div></div>
+      <div className="profile-tabs" role="tablist" style={{ marginTop: 14 }}>{(['All', 'active', 'pending_signature', 'draft', 'renewal_due', 'expired', 'terminated'] as const).map((key) => <button key={key} role="tab" aria-selected={filter === key} className={`profile-tab ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}><FileCheck2 />{key === 'All' ? `All · ${items.length}` : `${statusLabel(key)} · ${counts[key] ?? 0}`}</button>)}</div>
+      <div className="contract-records">
+        {visible.map((contract) => <article className={`contract-record is-${contract.status}`} key={contract.id}>
+          <div className="contract-record-top">
+            <div className={`avatar ${toneFor(contract.employee?.id ?? contract.id)}`}>{initialsFor(contract.employee?.name)}</div>
+            <div className="contract-record-head">
+              <div className="contract-record-title"><strong>{contract.employee?.name ?? 'Unassigned'}</strong><span className="contract-ref">{contract.reference}</span></div>
+              <span className="contract-record-kind">{contract.kind ?? 'Contract'}</span>
+            </div>
+            <div className="contract-record-pills"><span className={`status-pill ${statusTone(contract.status)}`}>{statusLabel(contract.status)}</span><span className="contract-term">{termLabel(contract)}</span></div>
+          </div>
+          <div className="contract-record-grid">
+            <div><small>Period</small><strong>{formatDate(contract.start_date)} — {contract.open_ended ? 'Open ended' : formatDate(contract.end_date)}</strong></div>
+            <div><small>Base salary</small><strong className="contract-salary">{money(contract.base_salary_minor)}</strong></div>
+            <div><small>Signature</small><strong>{contract.signed_at ? `Signed ${formatDate(contract.signed_at)}` : 'Awaiting signature'}</strong></div>
+            <div><small>Type</small><strong>{contract.kind ?? '—'}</strong></div>
+          </div>
+          {contract.description && <p className="contract-record-desc">{contract.description}</p>}
+          <div className="contract-record-foot">
+            <button className="more-button" onClick={() => setOpenId(contract.id)}><Eye /> Open contract</button>
+            <div className="contract-record-icons">
+              <button className="ghost-icon" onClick={() => startEdit(contract)} aria-label={`Edit ${contract.reference}`}><Pencil /></button>
+              <button className="ghost-icon" onClick={() => void downloadFile(`/api/contracts/${contract.id}/pdf`, `${contract.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))} aria-label={`Download ${contract.reference}`}><Download /></button>
+              <button className="ghost-icon danger" onClick={() => { setDeleting(contract); setConfirmText('') }} aria-label={`Delete ${contract.reference}`}><Trash2 /></button>
+            </div>
+          </div>
+        </article>)}
+        {visible.length === 0 && <div className="leave-empty"><FileCheck2 /><p>{q ? 'No contracts match your search.' : items.length === 0 ? 'No contracts on record yet.' : `No ${statusLabel(filter)} contracts right now.`}</p>{(q || filter !== 'All') && <button className="more-button" onClick={() => { setQuery(''); setFilter('All') }}>Clear filters</button>}</div>}
+      </div>
     </div>
+    {editing && <AppModal eyebrow="People documents" title={`Edit ${editing.reference}`} meta={`${editing.employee?.name ?? 'Unassigned'} · ${editing.kind ?? 'Contract'}`} icon={Pencil} footer={<><button className="secondary-button" onClick={() => setEditing(null)}>Cancel</button><button className="primary-button" disabled={busy} onClick={() => void saveEdit()}><FileCheck2 /> {busy ? 'Saving…' : 'Save changes'}</button></>} onClose={() => setEditing(null)}>
+      {error && <div className="password-error"><X /> {error}</div>}
+      <div className="form-grid">
+        <Field label="Base salary (TSh)"><input type="number" min="0" value={editSalary} onChange={(event) => setEditSalary(event.target.value)} /></Field>
+        <Field label="Status"><select value={editStatus} onChange={(event) => setEditStatus(event.target.value)}><option value="draft">Draft</option><option value="pending_signature">Pending signature</option><option value="active">Active</option><option value="renewal_due">Renewal due</option><option value="expired">Expired</option><option value="terminated">Terminated</option></select></Field>
+        <Field label="Description" full><textarea rows={3} value={editDescription} onChange={(event) => setEditDescription(event.target.value)} /></Field>
+        <Field label="Termination terms" full><textarea rows={3} value={editTermination} onChange={(event) => setEditTermination(event.target.value)} /></Field>
+      </div>
+    </AppModal>}
+    {deleting && <AppModal eyebrow="People documents" title={`Delete ${deleting.reference}?`} meta={`${deleting.employee?.name ?? 'Unassigned'} · ${deleting.kind ?? 'Contract'} · ${deleting.status}`} icon={Trash2} footer={<><button className="secondary-button" onClick={() => setDeleting(null)}>Cancel</button><button className="primary-button" disabled={busy || confirmText.trim() !== deleting.reference} onClick={() => void removeContract()}><Trash2 /> {busy ? 'Deleting…' : 'Delete contract'}</button></>} onClose={() => setDeleting(null)}>
+      <p className="settings-hint">The contract is erased permanently; attached files stay on the employee record. Type <strong>{deleting.reference}</strong> below to confirm.</p>
+      <div className="detail-field full"><small>Type {deleting.reference} to confirm</small><input value={confirmText} onChange={(event) => setConfirmText(event.target.value)} placeholder={deleting.reference} autoComplete="off" /></div>
+      {error && <div className="password-error"><X /> {error}</div>}
+    </AppModal>}
   </section>
 }
 
-function ContractDetailPage({ contract, onBack }: { contract: Contract; onBack: () => void }) {
+function ContractDetailPage({ contract, onBack, onEdit, onDelete }: { contract: Contract; onBack: () => void; onEdit?: () => void; onDelete?: () => void }) {
   const { documents, reloadOne } = useHrData()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1571,7 +1777,7 @@ function ContractDetailPage({ contract, onBack }: { contract: Contract; onBack: 
     <button className="back-link" onClick={onBack}><ChevronDown /> Back to contracts</button>
     <div className="panel contract-hero">
       <div className="profile-hero-main"><div className="avatar avatar-large avatar-sand">{initialsFor(contract.employee?.name)}</div><div><p className="eyebrow">{contract.reference}</p><h1>{contract.kind ?? 'Contract'}</h1><p className="muted-copy">{contract.employee?.name ?? 'Unassigned'}{contract.signed_at ? ` · signed ${formatDate(contract.signed_at)}` : ''}</p><div className="profile-hero-tags"><span className="status-pill">{contract.status}</span><span className="status-pill">{formatDate(contract.start_date)} — {contract.open_ended ? 'Open ended' : formatDate(contract.end_date)}</span></div></div></div>
-      <div className="form-actions"><button className="secondary-button" onClick={() => void downloadFile(`/api/contracts/${contract.id}/pdf`, `${contract.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))}><Download /> Export as PDF</button>{contract.status === 'draft' && <button className="primary-button" disabled={busy} onClick={() => void send()}><FileText /> {busy ? 'Sending…' : 'Send for signature'}</button>}</div>
+      <div className="form-actions"><button className="secondary-button" onClick={() => void downloadFile(`/api/contracts/${contract.id}/pdf`, `${contract.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))}><Download /> Export as PDF</button>{contract.status === 'draft' && <button className="primary-button" disabled={busy} onClick={() => void send()}><FileText /> {busy ? 'Sending…' : 'Send for signature'}</button>}{onEdit && <button className="secondary-button" onClick={onEdit}><Pencil /> Edit</button>}{onDelete && <button className="secondary-button" onClick={onDelete}><Trash2 /> Delete</button>}</div>
     </div>
     {error && <div className="panel contract-saved"><X /><div><strong>{error}</strong></div></div>}
     <div className="count-widget-row count-widget-row-4"><CountWidget value={money(contract.base_salary_minor)} hint="base salary" tone="tone-gold" icon={WalletCards} foot="Monthly gross before deductions" /><CountWidget value={contract.days_left !== null && contract.days_left !== undefined ? `${contract.days_left} days` : 'Open ended'} hint="time remaining" tone="tone-blue" icon={Clock3} foot="Agreed term length" /><CountWidget value={formatDate(contract.start_date)} hint="start date" tone="tone-green" icon={CalendarDays} foot="Agreement commences" /><CountWidget value={contract.open_ended ? 'Open ended' : formatDate(contract.end_date)} hint="end date" tone="tone-rose" icon={FileCheck2} foot="Confirmed end of term" /></div>
@@ -1838,13 +2044,15 @@ function ReceiptSheet({ request, onPrint }: { request: ApiMoneyRequest; onPrint:
     <div className="form-actions no-print"><button className="secondary-button" onClick={() => void downloadFile(`/api/money-requests/${request.id}/receipt-pdf`, `${request.receipt_number ?? request.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))}><Download /> Download receipt</button><button className="primary-button" onClick={onPrint}><FileText /> Export as PDF</button></div>
   </article>
 }
-function MoneyRequestDetail({ request, isEmployee, onBack, onDecide }: { request: ApiMoneyRequest; isEmployee: boolean; onBack: () => void; onDecide: (id: number, action: 'approved' | 'declined' | 'paid') => void }) {
+function MoneyRequestDetail({ request, isEmployee, onBack, onDecide, onRemove }: { request: ApiMoneyRequest; isEmployee: boolean; onBack: () => void; onDecide: (id: number, action: 'approved' | 'declined' | 'paid') => void; onRemove?: (id: number) => void }) {
   return <section className="management-page profile-page">
     <button className="back-link" onClick={onBack}><ChevronDown /> Back to money requests</button>
     <div className="panel profile-hero">
-      <div className="profile-hero-main"><div className={`avatar avatar-large ${toneFor(request.employee?.id ?? request.id)}`}>{request.employee?.initials ?? '-'}</div><div><p className="eyebrow">{request.reference} - {request.receipt_number ?? 'no receipt'}</p><h1>{request.kind ?? 'Money request'}</h1><p className="muted-copy">{request.employee?.name ?? '-'} - {money(request.amount_minor)}{request.created_at ? ` - submitted ${formatRelative(request.created_at)}` : ''}</p><div className="profile-hero-tags"><span className={`status-pill ${request.status === 'paid' ? 'ok' : request.status === 'declined' ? 'off' : ''}`}>{request.status}</span><span className="status-pill">{request.method}</span></div></div></div>
-      {!isEmployee && request.status === 'pending' && <div className="form-actions"><button className="secondary-button" onClick={() => onDecide(request.id, 'declined')}><X /> Decline</button><button className="primary-button" onClick={() => onDecide(request.id, 'approved')}><FileCheck2 /> Approve</button></div>}
-      {!isEmployee && request.status === 'approved' && <div className="form-actions"><button className="primary-button" onClick={() => onDecide(request.id, 'paid')}><WalletCards /> Mark as paid</button></div>}
+      <div className="profile-hero-main"><div className={`avatar avatar-large ${toneFor(request.employee?.id ?? request.id)}`}>{request.employee?.initials ?? '-'}</div><div><p className="eyebrow">{request.reference} - {request.receipt_number ?? 'no receipt'}</p><h1>{request.kind ?? 'Money request'}</h1><p className="muted-copy">{request.employee?.name ?? '-'} - {money(request.amount_minor)}{request.created_at ? ` - submitted ${formatRelative(request.created_at)}` : ''}</p><div className="profile-hero-tags"><span className={`status-pill ${request.status === 'paid' || request.status === 'approved' ? 'ok' : request.status === 'declined' ? 'off' : ''}`}>{request.status}</span><span className="status-pill">{request.method === 'bank_transfer' ? 'Bank transfer' : request.method === 'mobile_money' ? 'Mobile money' : request.method}</span></div></div></div>
+      {!isEmployee && request.status === 'pending' && <div className="form-actions"><button className="secondary-button" onClick={() => onDecide(request.id, 'declined')}><X /> Decline</button><button className="primary-button" onClick={() => onDecide(request.id, 'approved')}><FileCheck2 /> Approve</button>{onRemove && <button className="secondary-button" onClick={() => onRemove(request.id)}><Trash2 /> Delete</button>}</div>}
+      {!isEmployee && request.status === 'approved' && <div className="form-actions"><button className="primary-button" onClick={() => onDecide(request.id, 'paid')}><WalletCards /> Mark as paid</button>{onRemove && <button className="secondary-button" onClick={() => onRemove(request.id)}><Trash2 /> Delete</button>}</div>}
+      {isEmployee && request.status === 'pending' && onRemove && <div className="form-actions"><button className="secondary-button" onClick={() => onRemove(request.id)}><Trash2 /> Delete request</button></div>}
+      {!isEmployee && (request.status === 'paid' || request.status === 'declined') && onRemove && <div className="form-actions"><button className="secondary-button" onClick={() => onRemove(request.id)}><Trash2 /> Delete record</button></div>}
     </div>
     <ReceiptSheet request={request} onPrint={() => window.print()} />
   </section>
@@ -1854,11 +2062,11 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
   const [openId, setOpenId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const [filter, setFilter] = useState<'All' | 'pending' | 'approved' | 'paid' | 'declined'>('All')
+  const [query, setQuery] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [types, setTypes] = useState<MoneyTypeRef[]>([])
-  const [limit, setLimit] = useState<number | null>(null)
   const [typeId, setTypeId] = useState('')
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
@@ -1871,14 +2079,28 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
       setTypes(result.data)
       if (result.data.length > 0) setTypeId((current) => current || String(result.data[0].id))
     }).catch(() => {})
-    moneyApi.list({ per_page: 1 }).then((result) => setLimit(result.meta.limit_minor ?? null)).catch(() => {})
   }, [])
 
   const requests = moneyRequests.items
   const open = requests.find((request) => request.id === openId) ?? null
-  const requested = requests.filter((request) => request.status === 'pending' || request.status === 'approved').reduce((sum, request) => sum + request.amount_minor, 0)
-  const available = limit !== null ? Math.max(0, limit - requested) : null
-  const visible = requests.filter((request) => filter === 'All' || request.status === filter)
+  const counts = {
+    pending: requests.filter((request) => request.status === 'pending').length,
+    approved: requests.filter((request) => request.status === 'approved').length,
+    paid: requests.filter((request) => request.status === 'paid').length,
+    declined: requests.filter((request) => request.status === 'declined').length,
+  }
+  const methodLabel = (method: string | null | undefined) =>
+    method === 'bank_transfer' ? 'Bank transfer' : method === 'mobile_money' ? 'Mobile money' : (method ?? '—')
+  const statusTone = (status: string) =>
+    status === 'paid' || status === 'approved' ? 'ok' : status === 'declined' ? 'off' : ''
+  const q = query.trim().toLowerCase()
+  const visible = requests
+    .filter((request) => filter === 'All' || request.status === filter)
+    .filter((request) => {
+      if (!q) return true
+      return [request.kind ?? '', request.employee?.name ?? '', request.reference ?? '', request.receipt_number ?? '', request.reason ?? '']
+        .join(' ').toLowerCase().includes(q)
+    })
 
   const decide = async (id: number, action: 'approved' | 'declined' | 'paid') => {
     setBusy(true)
@@ -1892,6 +2114,24 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
       await reloadOne('moneyRequests')
       await reloadOne('notifications')
       setOpenId(null)
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: number) => {
+    const record = requests.find((item) => item.id === id)
+    if (!window.confirm(`Delete money request ${record?.reference ?? ''}? This cannot be undone.`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await moneyApi.remove(id)
+      setNotice('Money request deleted')
+      await reloadOne('moneyRequests')
+      await reloadOne('notifications')
+      if (openId === id) setOpenId(null)
     } catch (cause) {
       setError(apiMessage(cause))
     } finally {
@@ -1947,12 +2187,11 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
   if (moneyRequests.status === 'loading') return <EmptyState label="Loading money requests" />
   if (moneyRequests.status === 'error') return <EmptyState label="Could not load money requests" detail={moneyRequests.error ?? undefined} />
 
-  if (open) return <MoneyRequestDetail request={open} isEmployee={isEmployee} onBack={() => setOpenId(null)} onDecide={(id, action) => void decide(id, action)} />
+  if (open) return <MoneyRequestDetail request={open} isEmployee={isEmployee} onBack={() => setOpenId(null)} onDecide={(id, action) => void decide(id, action)} onRemove={(id) => void remove(id)} />
 
   if (isEmployee && creating) return <section className="form-page">
     <button className="back-link" onClick={() => setCreating(false)}><ChevronDown /> Back to money requests</button>
     <div className="workspace-hero"><div><p className="eyebrow">FINANCE</p><h1>Request money</h1><p>Send an advance or claim to People Operations and track the decision.</p></div></div>
-    <div className="leave-balance money-limit"><CircleDollarSign /><div><strong>{available !== null ? `${money(available)} available` : 'Limit unavailable'}</strong><p>{limit !== null ? `Advance limit ${money(limit)} - ${money(requested)} already requested` : 'Your current requests total ' + money(requested)}</p></div></div>
     {error && <div className="panel contract-saved"><X /><div><strong>{error}</strong></div></div>}
     <form className="panel" onSubmit={submit}>
       <div className="form-grid">
@@ -1962,7 +2201,6 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
         <Field label="Payment method"><select value={method} onChange={(event) => setMethod(event.target.value)}><option>Mobile money</option><option>Bank transfer</option></select></Field>
         <Field label="Supporting receipt" full><label className="upload-box"><FileUp /><span>{receipt ? receipt.name : 'Attach the receipt, invoice, or prescription'}</span><input type="file" onChange={(event) => setReceipt(event.target.files?.[0] ?? null)} /></label></Field>
         <Field label="Reason for the request" full><textarea required rows={4} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain what the money is for and attach any supporting detail" /></Field>
-        {amount && available !== null && <Field label="Remaining after approval" full><div className="leave-balance money-limit"><Sparkles /><div><strong>{money(Math.max(0, available - Number(amount)))} remaining</strong><p>{types.find((item) => String(item.id) === typeId)?.name ?? ''} - {neededBy ? `needed by ${formatDate(neededBy)}` : 'add a date'}</p></div></div></Field>}
       </div>
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setCreating(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}><CircleDollarSign /> {busy ? 'Sending...' : 'Send request to HR'}</button></div>
     </form>
@@ -1973,25 +2211,37 @@ function MoneyRequestPage({ isEmployee }: { isEmployee: boolean }) {
     {notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong><p>{isEmployee ? 'People Operations has been notified.' : 'The employee has been notified and the receipt updated.'}</p></div></div>}
     {error && <div className="panel contract-saved"><X /><div><strong>{error}</strong></div></div>}
     <div className="count-widget-row count-widget-row-4">
-      <CountWidget value={limit !== null && isEmployee ? compact(available ?? 0) : compact(requests.reduce((sum, request) => sum + request.amount_minor, 0))} hint={isEmployee ? 'available limit' : 'total requested'} tone="tone-gold" icon={CircleDollarSign} foot={isEmployee ? (limit !== null ? `Of ${compact(limit)} advance limit` : 'Your open requests') : 'All requests raised'} />
+      <CountWidget value={compact(requests.reduce((sum, request) => sum + request.amount_minor, 0))} hint="total requested" tone="tone-gold" icon={CircleDollarSign} foot="All requests raised" />
       <CountWidget value={`${requests.filter((request) => request.status === 'pending').length}`} hint="pending approval" tone="tone-amber" icon={Clock3} foot="Waiting on a decision" />
       <CountWidget value={compact(requests.filter((request) => request.status === 'approved' || request.status === 'paid').reduce((sum, request) => sum + request.amount_minor, 0))} hint="approved" tone="tone-green" icon={FileCheck2} foot="Cleared for payment" />
       <CountWidget value={compact(requests.filter((request) => request.status === 'paid').reduce((sum, request) => sum + request.amount_minor, 0))} hint="paid out" tone="tone-blue" icon={WalletCards} foot="Disbursed to date" />
     </div>
-    <div className="profile-tabs" role="tablist">{(['pending', 'approved', 'paid', 'declined', 'All'] as const).map((key) => <button key={key} role="tab" aria-selected={filter === key} className={`profile-tab ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}><WalletCards />{key === 'All' ? 'All requests' : key}</button>)}</div>
+    <div className="profile-tabs" role="tablist">{(['pending', 'approved', 'paid', 'declined', 'All'] as const).map((key) => <button key={key} role="tab" aria-selected={filter === key} className={`profile-tab ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}><WalletCards />{key === 'All' ? `All · ${requests.length}` : `${key} · ${counts[key]}`}</button>)}</div>
     <div className="panel">
-      <div className="panel-heading"><div><p className="eyebrow">{visible.length} SHOWN</p><h2>{filter === 'All' ? 'All requests' : `${filter} requests`}</h2></div></div>
-      <div className="profile-table"><div className="profile-table-row profile-table-head"><span>Request</span><span>Employee</span><span>Amount</span><span>Method</span><span>Status</span><span>Receipt</span><span /></div>
-        {visible.map((request) => <div className="profile-table-row" key={request.id}>
-          <span><strong>{request.kind ?? '-'}</strong></span>
-          <span>{isEmployee ? 'You' : request.employee?.name ?? '-'}</span>
-          <span className="payroll-net-cell">{money(request.amount_minor)}</span>
-          <span>{request.method}</span>
-          <span className={`status-pill ${request.status === 'paid' ? 'ok' : request.status === 'declined' ? 'off' : ''}`}>{request.status}</span>
-          <span className="receipt-no">{request.receipt_number ?? request.reference}</span>
-          <span className="employee-actions"><button onClick={() => setOpenId(request.id)} aria-label={`View receipt for ${request.reference}`}><Eye /></button>{!isEmployee && request.status === 'pending' && <><button disabled={busy} onClick={() => void decide(request.id, 'declined')} aria-label={`Decline ${request.reference}`}><X /></button><button disabled={busy} onClick={() => void decide(request.id, 'approved')} aria-label={`Approve ${request.reference}`}><FileCheck2 /></button></>}{!isEmployee && request.status === 'approved' && <button disabled={busy} onClick={() => void decide(request.id, 'paid')} aria-label={`Mark ${request.reference} paid`}><WalletCards /></button>}<button onClick={() => void downloadFile(`/api/money-requests/${request.id}/receipt-pdf`, `${request.receipt_number ?? request.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))} aria-label={`Download receipt for ${request.reference}`}><Download /></button></span>
-        </div>)}
-        {visible.length === 0 && <div className="leave-empty"><WalletCards /><p>No {filter === 'All' ? '' : filter + ' '}requests right now.</p></div>}
+      <div className="panel-heading"><div><p className="eyebrow">{visible.length} SHOWN</p><h2>{filter === 'All' ? 'All requests' : `${filter} requests`}</h2></div><div className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, type, reference" /></div></div>
+      <div className="leave-list">
+        {visible.map((request) => {
+          const canDelete = !isEmployee || request.status === 'pending'
+          return <article className="leave-row" key={request.id}>
+          <div className={`avatar ${toneFor(request.employee?.id ?? request.id)}`}>{request.employee?.initials ?? initialsFor(request.employee?.name)}</div>
+          <div className="leave-row-main">
+            <div className="leave-row-head"><strong>{request.kind ?? 'Money request'}</strong><span className={`status-pill ${statusTone(request.status)}`}>{request.status}</span></div>
+            <p className="leave-row-dates">{money(request.amount_minor)} <i>·</i> {methodLabel(request.method)}</p>
+            <p className="leave-row-meta">{isEmployee ? 'You' : request.employee?.name ?? '—'} <i>·</i> {request.reference}{request.receipt_number ? ` · ${request.receipt_number}` : ''}{request.created_at ? <> <i>·</i> Submitted {formatRelative(request.created_at)}</> : null}{request.needed_by ? <> <i>·</i> Needed by {formatDate(request.needed_by)}</> : null}</p>
+            {request.reason && <p className="leave-row-reason">{request.reason}</p>}
+          </div>
+          <div className="leave-row-actions">
+            {!isEmployee && request.status === 'pending' && <><button className="secondary-button" disabled={busy} onClick={() => void decide(request.id, 'declined')}>Decline</button><button className="primary-button" disabled={busy} onClick={() => void decide(request.id, 'approved')}><FileCheck2 /> Approve</button></>}
+            {!isEmployee && request.status === 'approved' && <button className="primary-button" disabled={busy} onClick={() => void decide(request.id, 'paid')}><WalletCards /> Mark as paid</button>}
+            <button className="more-button" onClick={() => setOpenId(request.id)}><Eye /> Open receipt</button>
+            <div style={{ display: 'flex', gap: 7 }}>
+              <button className="ghost-icon" style={{ flex: 1 }} onClick={() => void downloadFile(`/api/money-requests/${request.id}/receipt-pdf`, `${request.receipt_number ?? request.reference}.pdf`).catch((cause) => setError(apiMessage(cause)))} aria-label={`Download receipt for ${request.reference}`}><Download /></button>
+              {canDelete && <button className="ghost-icon" style={{ flex: 1 }} disabled={busy} onClick={() => void remove(request.id)} aria-label={`Delete ${request.reference}`}><Trash2 /></button>}
+            </div>
+          </div>
+        </article>
+        })}
+        {visible.length === 0 && <div className="leave-empty"><WalletCards /><p>{q ? 'No requests match your search.' : `No ${filter === 'All' ? '' : filter + ' '}requests right now.`}</p>{q && <button className="more-button" onClick={() => { setQuery(''); setFilter('All') }}>Clear search</button>}</div>}
       </div>
     </div>
   </section>
@@ -2001,15 +2251,42 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
   const isSelf = mode === 'self'
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [selfReg, setSelfReg] = useState<Registration | null>(null)
   const [selfStatus, setSelfStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [hrProfile, setHrProfile] = useState<Employee | null>(null)
   const [hrStatus, setHrStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [values, setValues] = useState({ name: '', email: '', phone: '', birth: '', start: '', hire: '', nida: '', tin: '', address: '', emergencyName: '', emergencyPhone: '' })
+  const [values, setValues] = useState({ name: '', email: '', phone: '', birth: '', start: '', hire: '', nida: '', tin: '', address: '', emergencyName: '', emergencyPhone: '', bankName: '', accountName: '', accountNumber: '' })
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [loginPw, setLoginPw] = useState('')
+  const [loginPwConfirm, setLoginPwConfirm] = useState('')
   const set = (patch: Partial<typeof values>) => setValues((current) => ({ ...current, ...patch }))
+
+  const setLoginPassword = async () => {
+    if (!hrProfile) return
+    if (loginPw.length < 8 || loginPw !== loginPwConfirm) {
+      setError(loginPw.length < 8 ? 'Set a password of at least 8 characters' : 'Both passwords must match')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const updated = await employeesApi.update(hrProfile.id, { password: loginPw, password_confirmation: loginPwConfirm })
+      setLoginPw('')
+      setLoginPwConfirm('')
+      setSaved(true)
+      setNotice(updated.password_reset ? `Portal password set for ${hrProfile.email} — they can now sign in with it` : 'Portal password unchanged')
+      const result = await employeesApi.get(hrProfile.id)
+      setHrProfile(result.employee)
+      await reloadOne('employees')
+    } catch (cause) {
+      setError(apiMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!isSelf) return
@@ -2031,6 +2308,7 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
           birth: toIsoDate(person.date_of_birth), start: toIsoDate(person.start_date), hire: toIsoDate(person.hire_date),
           nida: person.nida_number ?? '', tin: person.tin ?? '', address: person.address ?? '',
           emergencyName: person.emergency_contact_name ?? '', emergencyPhone: person.emergency_contact_phone ?? '',
+          bankName: person.bank_account?.bank_name ?? '', accountName: person.bank_account?.account_name ?? '', accountNumber: person.bank_account?.account_number ?? '',
         })
         setHrStatus('ready')
       })
@@ -2075,6 +2353,9 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
         address: values.address.trim() || null,
         emergency_contact_name: values.emergencyName.trim() || null,
         emergency_contact_phone: values.emergencyPhone.trim() || null,
+        bank_name: values.bankName.trim() || null,
+        account_name: values.accountName.trim() || null,
+        account_number: values.accountNumber.trim() || null,
       })
       if (avatarFile) {
         const form = new FormData()
@@ -2104,6 +2385,7 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
     <button className="back-link" onClick={onBack}><ChevronDown /> {isSelf ? 'Back to workspace' : `Back to employee management`}</button>
     <div className="workspace-hero"><div><p className="eyebrow">{isSelf ? 'Personal details' : 'People directory'}</p><h1>{isSelf ? 'Registration info' : `${name} - registration`}</h1><p>{isSelf ? 'Your personal, legal and banking details as held on your employee record.' : `Personal, legal and banking details on file for ${name}.`}</p></div>{!editing && !isSelf && <button className="primary-button" onClick={() => setEditing(true)}><Pencil /> Edit information</button>}</div>
     {saved && <div className="panel contract-saved"><Sparkles /><div><strong>Registration info updated</strong><p>{isSelf ? 'People Operations has been notified of your changes.' : `Changes were written to ${name}'s record in the people directory.`}</p></div></div>}
+    {notice && <div className="panel contract-saved"><Sparkles /><div><strong>{notice}</strong></div></div>}
     {error && <div className="panel contract-saved"><X /><div><strong>{error}</strong></div></div>}
 
     <article className="panel reg-hero">
@@ -2168,6 +2450,19 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
           </div>
         </article>}
 
+        {!isSelf && hrProfile && <article className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">SYSTEM ACCESS</p><h2>Portal login</h2></div><span className={`status-pill ${hrProfile.has_login ? 'ok' : 'off'}`}>{hrProfile.has_login ? 'Login active' : 'No login'}</span></div>
+          <div className="detail-fields profile-fields">
+            <div className="detail-field"><small>Login email address</small><strong>{hrProfile.email}</strong></div>
+            <div className="detail-field"><small>Last sign-in</small><strong>{hrProfile.last_login_at ? formatDate(hrProfile.last_login_at) : 'Never'}</strong></div>
+            <div className="detail-field"><small>Password on file</small><strong>••••••••</strong></div>
+            <div className="detail-field"><small>Set new password</small><input type="password" autoComplete="new-password" value={loginPw} onChange={(event) => setLoginPw(event.target.value)} placeholder="At least 8 characters" /></div>
+            <div className="detail-field"><small>Confirm new password</small><input type="password" autoComplete="new-password" value={loginPwConfirm} onChange={(event) => setLoginPwConfirm(event.target.value)} placeholder="Repeat the password" /></div>
+          </div>
+          <p className="settings-hint">Passwords are stored encrypted and cannot be displayed — set a new one here anytime. Leave both fields empty to keep the current password.</p>
+          <div className="form-actions"><button className="primary-button" disabled={busy} onClick={() => void setLoginPassword()}><ShieldCheck /> {busy ? 'Saving…' : 'Set portal password'}</button></div>
+        </article>}
+
         {isSelf && <article className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Banking</p><h2>Payment details</h2></div></div>
           {bankAccounts.length === 0 && <EmptyState label="No bank details on file" />}
@@ -2175,6 +2470,17 @@ function RegistrationInfo({ employeeId, mode, onBack }: { employeeId: number | n
             {bankAccounts.map((account) => <div className="detail-field" key={account.id}><small>{account.type}{account.is_primary ? ' - primary' : ''}</small><strong>{account.bank_name ?? '-'} - {account.account_number ?? '-'}</strong></div>)}
           </div>
           {primaryBank?.is_verified && <div className="profile-note"><ShieldCheck /><div><strong>Bank details verified</strong><p>Confirmed against the submitted bank confirmation document.</p></div></div>}
+        </article>}
+
+        {!isSelf && hrProfile && <article className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">Banking</p><h2>Payment details</h2></div>{editing ? <button className="secondary-button" disabled={busy} onClick={() => void save()}><FileCheck2 /> {busy ? 'Saving...' : 'Save changes'}</button> : <button className="more-button" onClick={() => setEditing(true)}><Pencil /> Edit</button>}</div>
+          <div className="detail-fields profile-fields">
+            <div className="detail-field"><small>Bank</small>{editing ? <input value={values.bankName} onChange={(event) => set({ bankName: event.target.value })} placeholder="e.g. CRDB" list="tz-banks-hr" /> : <strong>{hrProfile.bank_account?.bank_name ?? '-'}</strong>}</div>
+            <div className="detail-field"><small>Payment name</small>{editing ? <input value={values.accountName} onChange={(event) => set({ accountName: event.target.value })} placeholder="Name on the account" /> : <strong>{hrProfile.bank_account?.account_name ?? '-'}</strong>}</div>
+            <div className="detail-field"><small>Account number</small>{editing ? <input value={values.accountNumber} onChange={(event) => set({ accountNumber: event.target.value })} placeholder="e.g. 0150000000000" inputMode="numeric" /> : <strong>{hrProfile.bank_account?.account_number ?? '-'}</strong>}</div>
+          </div>
+          {!hrProfile.bank_account && !editing && <p className="settings-hint">No bank details on file. Press Edit to add them.</p>}
+          {editing && <datalist id="tz-banks-hr">{TANZANIAN_BANKS.map((bank) => <option key={bank} value={bank} />)}</datalist>}
         </article>}
       </div>
 
@@ -2385,9 +2691,10 @@ const currentYear = () => new Date().getFullYear()
 
 /** Twelve month rows from a monthly report, zero-filled for missing months. */
 function rowsOf(report: MonthlyReport | null): MonthRow[] {
+  // The API numbers months 0-based (0 = January).
   const byIndex = new Map((report?.rows ?? []).map((row) => [row.month_index, row]))
   return MONTH_NAMES.map((month, monthIndex) => {
-    const row = byIndex.get(monthIndex + 1)
+    const row = byIndex.get(monthIndex)
     return {
       month,
       monthIndex,
@@ -2401,7 +2708,17 @@ function rowsOf(report: MonthlyReport | null): MonthRow[] {
     }
   })
 }
-const compact = (value: number) => (value >= 1000000 ? `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}M` : `${Math.round(value / 1000)}k`)
+const compact = (value: number) => {
+  const clean = Math.max(0, Math.round(value))
+  if (clean === 0) return '0'
+  if (clean < 1000) return `${clean}`
+  if (clean < 1000000) {
+    const k = clean / 1000
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}k`
+  }
+  const m = clean / 1000000
+  return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+}
 
 const pct = (value: number, before: number) => (before === 0 ? 0 : Math.round(((value - before) / before) * 100))
 function CountWidget({ value, hint, tone, icon: Icon, delta, foot }: { value: string; hint: string; tone: string; icon: typeof Users; delta?: number; foot?: string }) {
@@ -2728,18 +3045,26 @@ function ReportsPage() {
   </section>
 }
 function EmployeeDashboard() {
-  const { user, employeeDashboard, leaveBalances, moneyRequests, payslips, contracts, notifications } = useHrData()
+  const { user, employeeDashboard, payslips, notifications } = useHrData()
   const firstName = (user?.name ?? '').split(' ')[0] || 'there'
   const dash = employeeDashboard
-  const balances = leaveBalances.items
-  const totalRemaining = balances.reduce((sum, item) => sum + item.remaining_days, 0)
-  const requestedTotal = dash?.money_requests.requested_minor ?? moneyRequests.items.reduce((sum, item) => sum + item.amount_minor, 0)
   const series = dash?.payslips.series ?? []
   const netTrend = series.length > 0 ? series.map((item) => item.net_minor) : payslips.items.map((item) => item.net_minor).reverse()
-  const latestNet = dash?.payslips.latest_net_minor ?? payslips.items[0]?.net_minor ?? 0
+  const latestNet = dash?.payslips.latest_net_minor ?? payslips.items[0]?.net_minor ?? null
   const contractEnd = dash?.contract?.end_date ?? null
   const contractDaysLeft = contractEnd ? Math.max(0, Math.round((new Date(contractEnd).getTime() - Date.now()) / 86400000)) : null
   const growth = (value: number, before: number) => (before === 0 ? 0 : Math.round(((value - before) / before) * 100))
+
+  // Never render metric tiles with fallback zeros. Until the employee
+  // dashboard payload (or payslips fallback) has arrived, show a loading
+  // state so no fake numbers flash on screen.
+  const payslipsLoading = payslips.status === 'idle' || payslips.status === 'loading'
+  if (!dash && payslipsLoading) {
+    return <section className="hr-dashboard"><EmptyState label="Loading dashboard" detail="Fetching your workspace." /></section>
+  }
+  if (!dash && latestNet === null) {
+    return <section className="hr-dashboard"><EmptyState label="Loading dashboard" detail="Fetching your workspace." /></section>
+  }
 
   const feed = notifications.items.slice(0, 6).map((item) => ({
     id: String(item.id),
@@ -2756,30 +3081,15 @@ function EmployeeDashboard() {
 
     <div className="dash-layout">
       <div className="dash-metrics">
-        <MetricTile label="Net pay this month" value={money(latestNet)} delta={netTrend.length > 1 ? growth(netTrend[netTrend.length - 1], netTrend[netTrend.length - 2]) : 0} foot="Latest payslip" icon={WalletCards} trend={netTrend.length > 0 ? netTrend : [0]} colour="tone-gold" />
-        <MetricTile label="Leave balance" value={`${totalRemaining} days`} delta={0} foot="Remaining" icon={CalendarDays} trend={balances.map((item) => item.remaining_days)} colour="tone-blue" />
-        <MetricTile label="Money requested" value={money(requestedTotal)} delta={0} foot={`${dash?.money_requests.count ?? moneyRequests.items.length} requests`} icon={CircleDollarSign} trend={[requestedTotal]} colour="tone-amber" />
+        <MetricTile label="Net pay this month" value={latestNet !== null ? money(latestNet) : '-'} delta={netTrend.length > 1 ? growth(netTrend[netTrend.length - 1], netTrend[netTrend.length - 2]) : 0} foot="Latest payslip" icon={WalletCards} trend={netTrend.length > 0 ? netTrend : [0]} colour="tone-gold" />
         <MetricTile label="Contract days left" value={contractDaysLeft !== null ? `${contractDaysLeft}` : '-'} delta={0} foot={dash?.contract ? dash.contract.status : 'No contract'} icon={FileCheck2} trend={[contractDaysLeft ?? 0]} colour="tone-violet" />
         <MetricTile label="Payslips" value={`${dash?.payslips.count ?? payslips.items.length}`} delta={0} foot="Available to date" icon={CreditCard} trend={netTrend.length > 0 ? netTrend : [0]} colour="tone-rose" />
       </div>
 
-      <PnlChart payroll={netTrend.length > 0 ? netTrend : [0]} requests={balances.map((item) => item.used_days)} labels={series.length > 0 ? series.map((item) => item.month) : balances.map((item) => item.leave_type)} primaryLabel="Net pay" secondaryLabel="Leave used" />
+      <PnlChart payroll={netTrend.length > 0 ? netTrend : [0]} requests={[]} labels={series.length > 0 ? series.map((item) => item.month) : ['-']} primaryLabel="Net pay" secondaryLabel="Net pay" />
     </div>
 
-    <div className="dash-lower">
-      <article className="panel dash-credit">
-        <header><p className="eyebrow">Money summary</p><button className="icon-button" aria-label="Open money requests"><ArrowUpRight /></button></header>
-        <h2>{money(requestedTotal)}</h2>
-        <span className="metric-delta up">+0%<small>requested to date</small></span>
-        <div className="dash-credit-block">
-          <div className="dash-credit-head"><strong>Request history</strong><button className="more-button">View all <ArrowUpRight /></button></div>
-          <div className="dash-request-list">
-            {moneyRequests.items.slice(0, 3).map((item) => <div key={item.id}><span><strong>{item.kind ?? 'Request'}</strong><small>{item.status}</small></span><b>{compact(item.amount_minor)}</b></div>)}
-            {moneyRequests.items.length === 0 && <div><span><strong>No requests yet</strong></span></div>}
-          </div>
-        </div>
-      </article>
-
+    <div className="dash-lower dash-lower-single">
       <article className="panel dash-activity">
         <div className="panel-heading"><div><p className="eyebrow">Latest changes</p><h2>Recent activity</h2></div></div>
         <div className="profile-table dash-table"><div className="profile-table-row profile-table-head"><span /><span>Activity</span><span>Amount</span><span>Status</span><span>Date</span><span /></div>
@@ -2990,88 +3300,121 @@ function PnlChart({ payroll, requests, labels, primaryLabel = 'Payroll', seconda
   </article>
 }
 function HrDashboard() {
-  const { dashboard, monthlyReport, moneyRequests, notifications } = useHrData()
+  const { dashboard, monthlyReport, moneyRequests, leaveRequests, contracts, documents, notifications } = useHrData()
+  const [order, setOrder] = useState<'new' | 'old'>('new')
   const rows = rowsOf(monthlyReport)
+  const year = monthlyReport?.year ?? currentYear()
+  const monthIdx = Math.min(new Date().getMonth(), 11)
+  const current = rows[monthIdx]
+  const previous = rows[(monthIdx - 1 + 12) % 12]
   const growth = (value: number, before: number) => (before === 0 ? 0 : Math.round(((value - before) / before) * 100))
-  const payrollTrend = rows.map((entry) => entry.payrollGross)
-  const requestTrend = rows.map((entry) => entry.requested)
-  const leaveTrend = rows.map((entry) => entry.leaveApproved + entry.leaveDeclined)
-  const headcountTrend = rows.map((entry) => entry.headcount)
 
-  const current = {
-    payrollGross: dashboard?.payroll.year_gross_minor ?? 0,
-    requested: dashboard?.money_requests.pending_amount_minor ?? 0,
-    leave: (dashboard?.leave.pending ?? 0) + (dashboard?.leave.approved_this_month ?? 0) + (dashboard?.leave.declined_this_month ?? 0),
-    contracts: dashboard?.contracts.active ?? 0,
-    headcount: dashboard?.headcount.active ?? 0,
-    rejected: dashboard?.leave.declined_this_month ?? 0,
-    requestsCount: dashboard?.money_requests.pending ?? 0,
-  }
-  const previous = { payrollGross: 0, requested: 0, leave: 0, contracts: 0, headcount: 0, rejected: 0 }
+  const payroll = dashboard?.payroll.year_gross_minor ?? 0
+  const requested = dashboard?.money_requests.pending_amount_minor ?? 0
+  const pendingCount = dashboard?.money_requests.pending ?? 0
+  const activeContracts = dashboard?.contracts.active ?? 0
+  const renewals = dashboard?.contracts.renewal_due ?? 0
+  const headcount = dashboard?.headcount.active ?? 0
+  const onLeave = dashboard?.headcount.on_leave ?? 0
 
-  const feed: ActivityRow[] = notifications.items.slice(0, 6).map((item) => ({
+  const stats = [
+    { label: 'Total payroll', value: compact(payroll), sub: `${growth(current.payrollGross, previous.payrollGross) >= 0 ? '+' : ''}${growth(current.payrollGross, previous.payrollGross)}% vs last month`, tone: 'p-peach', up: growth(current.payrollGross, previous.payrollGross) >= 0 },
+    { label: 'Money requested', value: compact(requested), sub: `${pendingCount} awaiting review`, tone: 'p-mint', up: true },
+    { label: 'Active contracts', value: `${activeContracts}`, sub: `${renewals} renewal due`, tone: 'p-lav', up: true },
+    { label: 'Employees', value: `${headcount}`, sub: `${onLeave} on leave today`, tone: 'p-cream', up: true },
+  ]
+
+  const bars = rows.map((entry) => entry.payrollGross)
+  const barMax = Math.max(...bars, 1)
+  const monthNames = rows.map((entry) => entry.month.slice(0, 3))
+
+  const feed = notifications.items.slice(0, 5).map((item) => ({
     id: String(item.id),
     title: item.title ?? 'Update',
     meta: item.created_at ? formatRelative(item.created_at) : '',
-    amount: '',
-    status: item.read ? 'Seen' : 'New',
-    time: item.created_at ? formatRelative(item.created_at) : '',
     kind: noticeKindFor(item.kind),
   }))
+
+  const tones: Record<string, string> = { payroll: '#fdf0e2', money: '#e7f4ea', contract: '#e9edfd', role: '#fdf5df', department: '#e9edfd', employee: '#e7f4ea', document: '#f3eefb', leave: '#e9f2fb', security: '#f3eefb' }
+  const ink: Record<string, string> = { payroll: '#9a622d', money: '#108652', contract: '#3f5cc0', role: '#9a622d', department: '#3f5cc0', employee: '#108652', document: '#7a4fc0', leave: '#2f6db0', security: '#7a4fc0' }
+
+  const expiring = contracts.items
+    .filter((item) => !item.open_ended && item.end_date && item.days_left !== null && item.days_left !== undefined && ['active', 'renewal_due', 'pending_signature'].includes(item.status))
+    .sort((a, b) => (a.days_left ?? 999999) - (b.days_left ?? 999999))
+    .slice(0, 5)
+
+  const txns = [
+    ...moneyRequests.items.map((item) => ({ id: `m-${item.id}`, name: item.employee?.name ?? '—', sub: item.kind ?? 'Money request', status: item.status, date: item.created_at, sort: item.created_at ? new Date(item.created_at).getTime() : 0, amount: money(item.amount_minor) })),
+    ...leaveRequests.items.map((item) => ({ id: `l-${item.id}`, name: item.employee?.name ?? '—', sub: item.leave_type ?? 'Leave', status: item.status, date: item.created_at, sort: item.created_at ? new Date(item.created_at).getTime() : 0, amount: `${item.days} days` })),
+  ].sort((a, b) => (order === 'new' ? b.sort - a.sort : a.sort - b.sort)).slice(0, 6)
+
+  const cats = [
+    { label: 'Leave', value: `${dashboard?.leave.pending ?? 0} pending`, icon: CalendarDays, tone: '#e9edfd' },
+    { label: 'Money', value: compact(requested), icon: CircleDollarSign, tone: '#fdf5df' },
+    { label: 'Renewals', value: `${renewals} due`, icon: FileCheck2, tone: '#e9f2fb' },
+    { label: 'Documents', value: `${dashboard?.documents.pending_review ?? 0} review`, icon: FolderOpen, tone: '#f3eefb' },
+    { label: 'Staff', value: `${headcount} active`, icon: Users, tone: '#e7f4ea' },
+  ]
 
   if (!dashboard) return <EmptyState label="Loading dashboard" detail="Fetching workspace figures." />
 
   return <section className="hr-dashboard">
-    <div className="workspace-hero"><div><div className="eyebrow"><span className="live-dot" /> {new Date().toLocaleDateString('en-GB', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>Good morning.</h1><p>Here is what is happening across your people today.</p></div><div className="header-actions"><button className="secondary-button"><CalendarDays /> This month <ChevronDown /></button></div></div>
+    <div className="workspace-hero"><div><h1>Welcome back</h1><p>Welcome to dashboard</p></div></div>
 
-    <div className="dash-layout">
-      <div className="dash-metrics">
-        <MetricTile label="Total payroll" value={compact(current.payrollGross)} delta={growth(current.payrollGross, previous.payrollGross)} foot="This year gross" icon={WalletCards} trend={payrollTrend} colour="tone-gold" />
-        <MetricTile label="Money requested" value={compact(current.requested)} delta={growth(current.requested, previous.requested)} foot="Pending advances" icon={CircleDollarSign} trend={requestTrend} colour="tone-amber" />
-        <MetricTile label="Leave requests" value={`${current.leave}`} delta={growth(current.leave, previous.leave)} foot="Pending and decided" icon={CalendarDays} trend={leaveTrend} colour="tone-blue" />
-        <MetricTile label="Active contracts" value={`${current.contracts}`} delta={growth(current.contracts, previous.contracts)} foot="On record" icon={FileCheck2} trend={rows.map((entry) => entry.contracts)} colour="tone-violet" />
-        <MetricTile label="Total employees" value={`${current.headcount}`} delta={growth(current.headcount, previous.headcount)} foot="Headcount" icon={Users} trend={headcountTrend} colour="tone-green" />
-        <MetricTile label="Leave declined" value={compact(current.rejected)} delta={-growth(current.rejected, previous.rejected)} foot="This month" icon={X} trend={rows.map((entry) => entry.leaveDeclined)} tone="down" colour="tone-rose" />
+    <div className="dash2-hero">
+      <div className="dash2-stats">
+        {stats.map((item) => <div className={`stat-pastel ${item.tone}`} key={item.label}>
+          <button className="stat-arrow" aria-label={`Open ${item.label}`}><ArrowUpRight /></button>
+          <small>{item.label}</small>
+          <strong>{item.value}</strong>
+          <span className={item.up ? 'up' : 'down'}>{item.sub}</span>
+        </div>)}
       </div>
-
-      <PnlChart payroll={payrollTrend} requests={requestTrend} labels={rows.map((entry) => entry.month)} />
+      <div className="dash2-teal">
+        <div className="dash2-teal-head"><div><p>Payroll</p><h2>{money(current.payrollGross)}<small>{growth(current.payrollGross, previous.payrollGross) >= 0 ? '+' : ''}{growth(current.payrollGross, previous.payrollGross)}%</small></h2></div><span className="dash2-chip"><CalendarDays /> {current.month}</span></div>
+        <div className="teal-bars">{bars.map((value, index) => <div className={`teal-col ${index === monthIdx ? 'hot' : ''}`} key={monthNames[index]}><i style={{ height: `${Math.max(3, (value / barMax) * 100)}%` }} /><small>{monthNames[index]}</small></div>)}</div>
+        <div className="teal-axis"><span>{compact(barMax)} top</span><span>{year} gross payroll by month</span></div>
+      </div>
     </div>
 
-    <div className="dash-lower">
-      <article className="panel dash-credit">
-        <header><p className="eyebrow">Pending money requests</p><button className="icon-button" aria-label="Open money requests"><ArrowUpRight /></button></header>
-        <h2>{compact(current.requested)}</h2>
-        <span className={`metric-delta ${growth(current.requested, previous.requested) >= 0 ? 'up' : 'down'}`}>{growth(current.requested, previous.requested) >= 0 ? '+' : ''}{growth(current.requested, previous.requested)}%</span>
-        <div className="dash-credit-block">
-          <div className="dash-credit-head"><strong>Latest requests</strong><button className="more-button">View all <ArrowUpRight /></button></div>
-          <div className="dash-request-list">
-            {moneyRequests.items.slice(0, 3).map((item) => <div key={item.id}><span><strong>{item.employee?.name ?? 'Request'}</strong><small>{item.status}</small></span><b>{compact(item.amount_minor)}</b></div>)}
-            {moneyRequests.items.length === 0 && <div><span><strong>No pending requests</strong></span></div>}
-          </div>
-        </div>
-      </article>
-
-      <article className="panel dash-activity">
-        <div className="panel-heading"><div><p className="eyebrow">Latest changes</p><h2>Recent activity</h2></div><div className="dash-activity-tools"><div className="search-field"><Search /><input placeholder="Search" /></div><button className="secondary-button"><Settings /> Filters</button></div></div>
-        <div className="profile-table dash-table"><div className="profile-table-row profile-table-head"><span /><span>Activity</span><span>Amount</span><span>Status</span><span>Date</span><span /></div>
-          {feed.map((row) => { const Icon = kindMeta[row.kind].icon; return <div className="profile-table-row" key={row.id}>
-            <span><label className="dash-check"><input type="checkbox" /><i /></label></span>
-            <span className="dash-activity-cell"><span className={`document-type-icon ${row.kind === 'money' ? 'is-image' : 'is-pdf'}`}><Icon /></span><span><strong>{row.title}</strong><small>{row.id} - {row.meta}</small></span></span>
-            <span className="payroll-net-cell">{row.amount}</span>
-            <span><span className={`status-pill ${row.status === 'Seen' ? 'ok' : ''}`}><i className="status-dot" />{row.status}</span></span>
-            <span>{row.time}</span>
-            <span><button className="ghost-icon" aria-label={`More actions for ${row.id}`}><MoreHorizontal /></button></span>
+    <div className="dash2-row2">
+      <article className="dash2-panel">
+        <header><h2>Recent activity</h2></header>
+        <div className="recent-list">
+          {feed.map((row) => { const Icon = kindMeta[row.kind].icon; return <div className="recent-row" key={row.id}>
+            <span className="recent-ico" style={{ background: tones[row.kind], color: ink[row.kind] }}><Icon /></span>
+            <div><strong>{row.title}</strong><small>{row.meta}</small></div>
           </div> })}
           {feed.length === 0 && <div className="leave-empty"><Activity /><p>No recent activity.</p></div>}
         </div>
       </article>
-    </div>
-
-    <div className="count-widget-row count-widget-row-4">
-      <CountWidget value={`${dashboard.headcount.on_leave}`} hint="on leave today" tone="tone-blue" icon={CalendarDays} foot="Out of office" />
-      <CountWidget value={`${dashboard.leave.pending}`} hint="leave to review" tone="tone-gold" icon={ClipboardCheck} foot="Awaiting decision" />
-      <CountWidget value={`${dashboard.contracts.renewal_due}`} hint="renewals due" tone="tone-violet" icon={FileCheck2} foot="Contracts expiring" />
-      <CountWidget value={`${dashboard.documents.pending_review}`} hint="documents to review" tone="tone-amber" icon={FolderOpen} foot="Waiting on People Ops" />
+      <div>
+        <div className="cat-tiles">
+          {cats.map((item) => { const Icon = item.icon; return <button className="cat-tile" style={{ background: item.tone }} key={item.label}><span><Icon /></span><strong>{item.label}</strong><small>{item.value}</small></button> })}
+        </div>
+        <article className="dash2-panel" style={{ marginBottom: 14 }}>
+          <header><h2>Contracts expiring soon</h2><span className="report-chip">{expiring.length} tracked</span></header>
+          <div className="expiry-list">
+            {expiring.map((item) => { const left = item.days_left ?? 0; return <div className="expiry-row" key={item.id}>
+              <span className={`avatar avatar-mini ${toneFor(item.employee?.id ?? item.id)}`}>{initialsFor(item.employee?.name)}</span>
+              <div><strong>{item.employee?.name ?? 'Unassigned'}</strong><small>{item.reference} · ends {item.end_date ? formatDate(item.end_date) : '—'}</small></div>
+              <span className={`expiry-days ${left < 0 ? 'hot' : left < 30 ? 'hot' : left < 90 ? 'warm' : ''}`}>{left < 0 ? `Overdue ${Math.abs(left)}d` : `${left} days left`}</span>
+            </div> })}
+            {expiring.length === 0 && <div className="leave-empty"><FileCheck2 /><p>No upcoming renewals.</p></div>}
+          </div>
+        </article>
+        <article className="dash2-panel">
+          <header><h2>Transactions</h2><span className="seg-toggle"><button className={order === 'new' ? 'on' : ''} onClick={() => setOrder('new')}>Newest</button><button className={order === 'old' ? 'on' : ''} onClick={() => setOrder('old')}>Oldest</button></span></header>
+          <div className="txn-table-head"><span>Name</span><span>Status</span><span>Date</span><span style={{ textAlign: 'right' }}>Amount</span></div>
+          {txns.map((row) => <div className="txn-row" key={row.id}>
+            <span className="txn-who"><span className={`avatar avatar-mini ${toneFor(row.id)}`}>{initialsFor(row.name)}</span><span><strong>{row.name}</strong><small>{row.sub}</small></span></span>
+            <span><span className={`status-pill ${row.status === 'paid' || row.status === 'approved' || row.status === 'active' ? 'ok' : row.status === 'declined' ? 'off' : ''}`}>{row.status}</span></span>
+            <span>{row.date ? formatDate(row.date) : '—'}</span>
+            <span className="txn-amt">{row.amount}</span>
+          </div>)}
+          {txns.length === 0 && <div className="leave-empty"><Activity /><p>No transactions yet.</p></div>}
+        </article>
+      </div>
     </div>
   </section>
 }
